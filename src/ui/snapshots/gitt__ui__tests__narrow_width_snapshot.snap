@@ -1,0 +1,15 @@
+---
+source: src/ui/mod.rs
+assertion_line: 356
+expression: "render_to_string(&s, 40, 10)"
+---
+ feature (HEAD)    origin/main
+Search:   (3 matches)
+aaaaaaa 3 days ago    Ada Lovelace     a
+bbbbbbb 5 days ago    Bo               f
+ccccccc 2 weeks ago   Cy               r
+
+
+
+
+j/k move · / search · Tab preview · ←/→

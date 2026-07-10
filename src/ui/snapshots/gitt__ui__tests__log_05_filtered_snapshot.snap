@@ -1,0 +1,17 @@
+---
+source: src/ui/mod.rs
+assertion_line: 290
+expression: "render_to_string(&s, 80, 12)"
+---
+ feature (HEAD)    origin/main
+Search: parser█  (1 matches)
+ccccccc 2 weeks ago   Cy               refactor parser (v1.0)
+
+
+
+
+
+
+
+
+j/k move · / search · Tab preview · ←/→ view · Enter actions · R fetch · q quit

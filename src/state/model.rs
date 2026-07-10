@@ -1,0 +1,207 @@
+//! The application state and its pure helpers (selection, matching, scrolling).
+
+use std::collections::HashMap;
+
+use crate::domain::{Commit, View};
+use crate::fuzzy::{self, MatchEntry};
+
+/// Rows of "chrome" around the commit list: header (1) + search bar (1) + status (1).
+pub const CHROME_ROWS: u16 = 3;
+
+/// Input focus / interaction mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Browsing the list with vim motions.
+    List,
+    /// Typing into the search filter.
+    Search,
+    /// The action menu is open over the selected commit.
+    Menu,
+}
+
+/// Load state of a single view's log.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Load {
+    /// Not requested yet.
+    #[default]
+    Idle,
+    /// Load in flight.
+    Loading,
+    /// Loaded commits (newest first).
+    Loaded(Vec<Commit>),
+    /// Load failed with a message.
+    Failed(String),
+}
+
+/// An action the user can run on the selected commit (mirrors glogm's secondary menu).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuAction {
+    OpenGithub,
+    OpenPr,
+    CopySha,
+    Checkout,
+    CopyRevert,
+}
+
+impl MenuAction {
+    /// The menu items, in display order.
+    pub fn all() -> Vec<MenuAction> {
+        vec![
+            MenuAction::OpenGithub,
+            MenuAction::OpenPr,
+            MenuAction::CopySha,
+            MenuAction::Checkout,
+            MenuAction::CopyRevert,
+        ]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MenuAction::OpenGithub => "Open in GitHub",
+            MenuAction::OpenPr => "Open Pull Request",
+            MenuAction::CopySha => "Copy SHA",
+            MenuAction::Checkout => "Checkout",
+            MenuAction::CopyRevert => "Copy revert command",
+        }
+    }
+}
+
+/// The action menu overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionMenu {
+    pub items: Vec<MenuAction>,
+    pub cursor: usize,
+    /// The commit the menu was opened on.
+    pub hash: String,
+    pub short: String,
+    pub subject: String,
+}
+
+impl ActionMenu {
+    pub fn selected(&self) -> MenuAction {
+        self.items[self.cursor]
+    }
+}
+
+/// State of the diff-preview pane.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PreviewState {
+    #[default]
+    Idle,
+    Loading(String),
+    Ready {
+        hash: String,
+        text: String,
+    },
+    Failed {
+        hash: String,
+        error: String,
+    },
+}
+
+/// The whole application state.
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pub view: View,
+    pub logs: HashMap<View, Load>,
+    pub filter: String,
+    /// Ranked matches for the active view + filter.
+    pub matches: Vec<MatchEntry>,
+    /// Index into `matches` of the selected row.
+    pub cursor: usize,
+    /// Index into `matches` of the first visible row.
+    pub top: usize,
+    pub mode: Mode,
+    pub preview_open: bool,
+    pub preview: PreviewState,
+    pub menu: Option<ActionMenu>,
+    /// Transient status-line message.
+    pub status: Option<String>,
+    pub current_branch: String,
+    pub main_branch: String,
+    pub remote_url: Option<String>,
+    /// Terminal size (cols, rows).
+    pub size: (u16, u16),
+    pub should_quit: bool,
+}
+
+impl AppState {
+    pub fn new(current_branch: String, main_branch: String, remote_url: Option<String>) -> Self {
+        AppState {
+            view: View::LocalHead,
+            logs: HashMap::new(),
+            filter: String::new(),
+            matches: Vec::new(),
+            cursor: 0,
+            top: 0,
+            mode: Mode::List,
+            preview_open: false,
+            preview: PreviewState::Idle,
+            menu: None,
+            status: None,
+            current_branch,
+            main_branch,
+            remote_url,
+            size: (80, 24),
+            should_quit: false,
+        }
+    }
+
+    /// Number of commit rows visible in the list given the current terminal height.
+    pub fn viewport_rows(&self) -> usize {
+        (self.size.1.saturating_sub(CHROME_ROWS)).max(1) as usize
+    }
+
+    /// Loaded commits for the active view (empty slice if not loaded).
+    pub fn commits(&self) -> &[Commit] {
+        match self.logs.get(&self.view) {
+            Some(Load::Loaded(commits)) => commits,
+            _ => &[],
+        }
+    }
+
+    /// The currently selected commit, if any.
+    pub fn selected(&self) -> Option<&Commit> {
+        let entry = self.matches.get(self.cursor)?;
+        self.commits().get(entry.commit_idx)
+    }
+
+    /// Full hash of the selected commit.
+    pub fn selected_hash(&self) -> Option<String> {
+        self.selected().map(|c| c.hash.clone())
+    }
+
+    /// Recompute matches for the active view + filter, then re-clamp cursor and scroll.
+    pub fn recompute_matches(&mut self) {
+        self.matches = match self.logs.get(&self.view) {
+            Some(Load::Loaded(commits)) => fuzzy::filter(commits, &self.filter),
+            _ => Vec::new(),
+        };
+        self.clamp_cursor();
+        self.clamp_scroll();
+    }
+
+    /// Keep the cursor within the match list.
+    pub fn clamp_cursor(&mut self) {
+        if self.matches.is_empty() {
+            self.cursor = 0;
+        } else if self.cursor >= self.matches.len() {
+            self.cursor = self.matches.len() - 1;
+        }
+    }
+
+    /// Keep the selected row visible: adjust `top` so `cursor` is within the viewport.
+    pub fn clamp_scroll(&mut self) {
+        let rows = self.viewport_rows();
+        if self.cursor < self.top {
+            self.top = self.cursor;
+        } else if self.cursor >= self.top + rows {
+            self.top = self.cursor + 1 - rows;
+        }
+        // Don't leave blank space at the bottom when the list is longer than the viewport.
+        let max_top = self.matches.len().saturating_sub(rows);
+        if self.top > max_top {
+            self.top = max_top;
+        }
+    }
+}

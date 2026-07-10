@@ -1,0 +1,17 @@
+---
+source: src/ui/mod.rs
+assertion_line: 330
+expression: "render_to_string(&s, 80, 12)"
+---
+ feature (HEAD)    origin/main
+Search:   (3 matches)
+aaaaaaa 3 days ago    Ada Lovelace     add fuzzy search (HEAD, feature)
+bbbbbbb 5 days ago    Bo ┌ aaaaaaa add fuzzy search ──┐
+ccccccc 2 weeks ago   Cy │ Open in GitHub             │(v1.0)
+                         │ Open Pull Request          │
+                         │ Copy SHA                   │
+                         │ Checkout                   │
+                         │ Copy revert command        │
+                         └────────────────────────────┘
+
+j/k move · / search · Tab preview · ←/→ view · Enter actions · R fetch · q quit

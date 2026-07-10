@@ -1,0 +1,13 @@
+---
+source: src/ui/mod.rs
+assertion_line: 340
+expression: "render_to_string(&s, 80, 8)"
+---
+ main (HEAD)    origin/main
+Search:   (0 matches)
+No commits
+
+
+
+
+j/k move · / search · Tab preview · ←/→ view · Enter actions · R fetch · q quit

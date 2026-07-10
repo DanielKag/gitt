@@ -1,0 +1,17 @@
+---
+source: src/ui/mod.rs
+assertion_line: 303
+expression: "render_to_string(&s, 80, 12)"
+---
+ feature (HEAD)    origin/main
+Search:   (1 matches)
+eeeeeee 1 hour ago    Cy               origin tip (origin/main)
+
+
+
+
+
+
+
+
+j/k move · / search · Tab preview · ←/→ view · Enter actions · R fetch · q quit
