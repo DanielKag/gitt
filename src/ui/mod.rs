@@ -154,26 +154,44 @@ fn teaser(text: &str, suffix: &str, width: usize, rows: usize) -> (Text<'static>
     }
 }
 
-/// A centered, floating modal showing the full summary (styled), sized to most of the body. It reads
-/// live state, so a still-streaming summary keeps filling in while the modal is open.
+/// A centered, floating modal showing the full summary (styled), sized to hug the text: it wraps to
+/// a readable max width, then shrinks to the longest wrapped line and the line count. Reads live
+/// state, so a still-streaming summary keeps filling in while the modal is open.
 fn render_summary_modal(frame: &mut Frame, body: Rect, state: &AppState) {
-    let content = match state.selected_summary() {
-        Some(SummaryState::Ready(text)) => Text::from(summary_line(text, "")),
-        Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => {
-            Text::from(Line::styled("summarizing with ollama…", theme::dim()))
+    let (content, plain) = match state.selected_summary() {
+        Some(SummaryState::Ready(text)) => (summary_line(text, ""), text.replace('`', "")),
+        Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => (
+            Line::styled("summarizing with ollama…", theme::dim()),
+            "summarizing with ollama…".to_string(),
+        ),
+        Some(SummaryState::Generating(buf)) => {
+            (summary_line(buf, "▌"), format!("{}▌", buf.replace('`', "")))
         }
-        Some(SummaryState::Generating(buf)) => Text::from(summary_line(buf, "▌")),
-        Some(SummaryState::Failed(error)) => Text::from(Line::styled(
-            format!("summary failed: {error}"),
-            theme::dim(),
-        )),
-        _ => Text::from(Line::styled("press s for an AI summary", theme::dim())),
+        Some(SummaryState::Failed(error)) => {
+            let msg = format!("summary failed: {error}");
+            (Line::styled(msg.clone(), theme::dim()), msg)
+        }
+        _ => (
+            Line::styled("press s for an AI summary", theme::dim()),
+            "press s for an AI summary".to_string(),
+        ),
     };
-    let w = body.width.saturating_sub(6).min(100);
-    let h = body.height.saturating_sub(2);
+
+    let title = "ai summary · Esc to close";
+    // Wrap to a readable max width, then shrink the box to the longest wrapped line (and the title).
+    let max_inner = (body.width.saturating_sub(6) as usize).min(72);
+    let lines = wrap_words(&plain, max_inner.max(1));
+    let inner_w = lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(title.chars().count());
+    let w = (inner_w as u16 + 2).min(body.width);
+    let h = (lines.len() as u16 + 2).min(body.height);
     let area = centered_rect(body, w, h);
     frame.render_widget(ratatui::widgets::Clear, area);
-    wrapped_pane(frame, area, "ai summary · Esc to close", content);
+    wrapped_pane(frame, area, title, Text::from(content));
 }
 
 /// Build a summary line: normal prose in the subject style, `code` spans in the code style, with an
