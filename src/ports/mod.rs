@@ -7,7 +7,7 @@ pub mod system;
 
 use std::sync::Arc;
 
-use crate::domain::{Commit, View};
+use crate::domain::{Commit, DiffKind, StatusEntry, View};
 
 /// Whether git output should include ANSI color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +37,18 @@ pub trait GitRepo: Send + Sync {
     fn show(&self, hash: &str, color: ColorMode) -> Result<String, GitError>;
     fn fetch(&self) -> Result<(), GitError>;
     fn checkout(&self, hash: &str) -> Result<(), GitError>;
+
+    // --- gitt status -------------------------------------------------------------------------------
+    /// Parsed `git status` for the working tree.
+    fn status(&self) -> Result<Vec<StatusEntry>, GitError>;
+    /// The diff text to show for a file, depending on which side of it changed.
+    fn file_diff(&self, path: &str, kind: DiffKind) -> Result<String, GitError>;
+    /// Stage a file (`git add`), covering modifications, additions, and deletions.
+    fn stage(&self, path: &str) -> Result<(), GitError>;
+    /// Unstage a file (`git restore --staged`).
+    fn unstage(&self, path: &str) -> Result<(), GitError>;
+    /// Discard a file's changes: restore a tracked file, or delete an untracked one.
+    fn discard(&self, path: &str, untracked: bool) -> Result<(), GitError>;
 }
 
 /// A source of "now" (unix seconds) — injected so relative dates are deterministic in tests.

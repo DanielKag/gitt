@@ -8,8 +8,14 @@ pub mod effect;
 pub mod event;
 pub mod model;
 pub mod reducer;
+pub mod status;
+pub mod status_reducer;
 
 pub use effect::Effect;
 pub use event::Event;
 pub use model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState};
 pub use reducer::update;
+pub use status::{
+    ConfirmDiscard, FileAction, FileMenu, FilePreview, StatusLoad, StatusMode, StatusState,
+};
+pub use status_reducer::update_status;

@@ -1,0 +1,17 @@
+---
+source: src/ui/status.rs
+assertion_line: 243
+expression: "render_to_string(&s, 80, 12)"
+---
+ feature (status)   4 changed · 2 staged
+A  src/status.rs                        ┌diff──────────────────────────────────┐
+ M src/reducer.rs                       │@@ -1 +1 @@                           │
+MM src/ui/mod.rs                        │-old line                             │
+?? notes.txt                            │+new line                             │
+                                        │                                      │
+                                        │                                      │
+                                        │                                      │
+                                        │                                      │
+                                        │                                      │
+                                        └──────────────────────────────────────┘
+j/k move · space stage/unstage · d discard · Tab diff · Enter actions · R reload

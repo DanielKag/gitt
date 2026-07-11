@@ -3,5 +3,7 @@
 pub mod decorations;
 pub mod log;
 pub mod remote;
+pub mod status;
 
 pub use log::{FIELD_SEP, RECORD_SEP, parse_log};
+pub use status::parse_status;

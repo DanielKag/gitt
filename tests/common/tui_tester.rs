@@ -32,6 +32,11 @@ pub struct Tui {
 impl Tui {
     /// Spawn `gitt log` against `repo`, with an isolated HOME and a side-effect sink.
     pub fn spawn(repo: &Path) -> Tui {
+        Self::spawn_cmd(repo, "log")
+    }
+
+    /// Spawn `gitt <subcommand>` against `repo`, with an isolated HOME and a side-effect sink.
+    pub fn spawn_cmd(repo: &Path, subcommand: &str) -> Tui {
         let home = tempfile::tempdir().unwrap();
         let sink = tempfile::tempdir().unwrap();
 
@@ -46,7 +51,7 @@ impl Tui {
             .unwrap();
 
         let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_gitt"));
-        cmd.arg("log");
+        cmd.arg(subcommand);
         cmd.cwd(repo);
         // Deterministic environment (see CLAUDE.md "E2E determinism rules").
         cmd.env("TERM", "xterm-256color");

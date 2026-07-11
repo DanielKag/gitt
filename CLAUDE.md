@@ -29,6 +29,33 @@ pure function tested against fixtures). `Clock` feeds relative dates so they're 
 
 ---
 
+## The second rule: one tool, one feel
+
+Every `gitt` subcommand must feel like it was built by the same team to the same standard — a user who
+learns `gitt log` already knows `gitt status`. New features **reuse**, never re-invent:
+
+- **Colors & styles** come from `ui/theme.rs` — the single source of truth. Never hardcode a `Color`
+  or `Style` in a screen. Need a new semantic style? Add a named function to `theme` and use it
+  everywhere that role appears.
+- **Components** are shared. The commit/file list, the centered overlay (menu / confirmation), the
+  header/tabs, the search bar, and the help/status line are common widgets — factor them into shared
+  `ui` helpers rather than copying a screen's rendering. A second screen that needs a list uses the
+  same list renderer.
+- **Keybindings are a shared vocabulary.** A key means the same thing everywhere: `j`/`k`/`g`/`G`/
+  `Ctrl-d`/`u`/`f`/`b` navigate, `Tab` toggles preview, `Enter` opens the action menu, `Esc` dismisses
+  an overlay, `R` reloads, `/` searches, `q`/`Ctrl-c` quit. Don't repurpose a key for something a user
+  wouldn't expect from its meaning in another screen; if a screen adds a key, prefer one that's free
+  everywhere.
+- **Interaction patterns match.** Destructive actions are always gated by the same confirmation
+  overlay; long/expensive work runs off the UI thread as an `Effect` and reports via the status line;
+  the view reflects real state after a mutation rather than optimistically guessing.
+
+When you add a screen, the diff should be mostly new *behavior* (reducer + a thin port), not new
+*chrome*. If you find yourself writing a second color palette, a second list widget, or a second
+meaning for `Tab`, stop — lift the existing one into a shared spot instead.
+
+---
+
 ## TDD loop (do this for every change)
 
 1. **Spec first.** Write/update the feature spec in `specs/` (use `/spec`). Each acceptance

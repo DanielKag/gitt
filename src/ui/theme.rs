@@ -32,3 +32,14 @@ pub fn dim() -> Style {
 pub fn menu_selected() -> Style {
     Style::new().add_modifier(Modifier::REVERSED)
 }
+
+// --- gitt status badges (git's own convention: green = staged, red = unstaged/untracked) ---------
+pub fn staged() -> Style {
+    Style::new().fg(Color::Green)
+}
+pub fn unstaged() -> Style {
+    Style::new().fg(Color::Red)
+}
+pub fn untracked() -> Style {
+    Style::new().fg(Color::Red).add_modifier(Modifier::DIM)
+}

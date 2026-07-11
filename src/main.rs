@@ -9,7 +9,7 @@ use gitt::ports::git_cli::{self, RealGit};
 use gitt::ports::system::{RealBrowser, RealClipboard, RealClock, RealPr};
 use gitt::ports::{Clock, Ports};
 use gitt::runtime;
-use gitt::state::AppState;
+use gitt::state::{AppState, StatusState};
 
 #[derive(Parser)]
 #[command(name = "gitt", version, about = "Git-ty — an interactive git TUI")]
@@ -26,12 +26,15 @@ enum Command {
         #[arg(long, default_value_t = 5000)]
         max_count: usize,
     },
+    /// Stage, unstage, diff, and discard working-tree changes interactively.
+    Status,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Log { max_count } => run_log(max_count),
+        Command::Status => run_status(),
     }
 }
 
@@ -56,6 +59,29 @@ fn run_log(max_count: usize) -> Result<()> {
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),
         log_limit: max_count,
+    };
+
+    runtime::run(state, ports)
+}
+
+fn run_status() -> Result<()> {
+    let dir = std::env::current_dir().context("cannot determine current directory")?;
+
+    if !git_cli::is_git_repo(&dir) {
+        bail!("not a git repository (or any of the parent directories)");
+    }
+
+    let current_branch = git_cli::current_branch(&dir);
+    let state = StatusState::new(current_branch);
+
+    // Status needs neither main-branch detection nor a clock (no relative dates), so those are
+    // placeholders; the same `Ports`/`RealGit` seam is reused so effect dispatch is identical.
+    let ports = Ports {
+        git: Arc::new(RealGit::new(dir, "main".to_string(), 0)),
+        clipboard: Arc::new(RealClipboard),
+        browser: Arc::new(RealBrowser),
+        pr: Arc::new(RealPr),
+        log_limit: 0,
     };
 
     runtime::run(state, ports)

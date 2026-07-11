@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{ColorMode, GitError, GitRepo};
-use crate::domain::{Commit, View, main_branch::resolve_main_branch};
+use crate::domain::{Commit, DiffKind, StatusEntry, View, main_branch::resolve_main_branch};
 use crate::parse::log::{PRETTY_FORMAT, parse_log};
 use crate::parse::remote::parse_remote_show;
+use crate::parse::status::{STATUS_ARGS, parse_status};
 
 /// A git repository at `dir`, with the main branch and "now" resolved once at construction.
 pub struct RealGit {
@@ -62,6 +63,38 @@ impl GitRepo for RealGit {
 
     fn checkout(&self, hash: &str) -> Result<(), GitError> {
         self.run(&["checkout", "--quiet", hash]).map(|_| ())
+    }
+
+    fn status(&self) -> Result<Vec<StatusEntry>, GitError> {
+        let raw = self.run(STATUS_ARGS)?;
+        Ok(parse_status(&raw))
+    }
+
+    fn file_diff(&self, path: &str, kind: DiffKind) -> Result<String, GitError> {
+        match kind {
+            // Untracked files have no tracked version to diff against; show their contents.
+            DiffKind::Untracked => std::fs::read_to_string(self.dir.join(path))
+                .map_err(|e| GitError::Io(format!("{path}: {e}"))),
+            DiffKind::Worktree => self.run(&["diff", "--no-color", "--", path]),
+            DiffKind::Staged => self.run(&["diff", "--no-color", "--staged", "--", path]),
+        }
+    }
+
+    fn stage(&self, path: &str) -> Result<(), GitError> {
+        self.run(&["add", "--", path]).map(|_| ())
+    }
+
+    fn unstage(&self, path: &str) -> Result<(), GitError> {
+        self.run(&["restore", "--staged", "--", path]).map(|_| ())
+    }
+
+    fn discard(&self, path: &str, untracked: bool) -> Result<(), GitError> {
+        if untracked {
+            std::fs::remove_file(self.dir.join(path))
+                .map_err(|e| GitError::Io(format!("{path}: {e}")))
+        } else {
+            self.run(&["restore", "--", path]).map(|_| ())
+        }
     }
 }
 

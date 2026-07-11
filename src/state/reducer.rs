@@ -65,6 +65,12 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
             });
             vec![]
         }
+        // Status-screen events never reach the log reducer at runtime (separate screen); ignore them.
+        Event::StatusLoaded(_)
+        | Event::StatusFailed(_)
+        | Event::FileDiffLoaded { .. }
+        | Event::FileDiffFailed { .. }
+        | Event::StatusMutated { .. } => vec![],
     }
 }
 

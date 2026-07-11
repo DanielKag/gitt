@@ -62,8 +62,58 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
             let pr = ports.pr.clone();
             action(tx, "Opened PR", move || pr.open_pr(&hash));
         }
+        Effect::LoadStatus => {
+            let git = ports.git.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let ev = match git.status() {
+                    Ok(entries) => Event::StatusLoaded(entries),
+                    Err(e) => Event::StatusFailed(e.to_string()),
+                };
+                let _ = tx.send(ev);
+            });
+        }
+        Effect::LoadFileDiff { path, kind } => {
+            let git = ports.git.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let ev = match git.file_diff(&path, kind) {
+                    Ok(text) => Event::FileDiffLoaded { path, text },
+                    Err(e) => Event::FileDiffFailed {
+                        path,
+                        error: e.to_string(),
+                    },
+                };
+                let _ = tx.send(ev);
+            });
+        }
+        Effect::Stage(path) => {
+            let git = ports.git.clone();
+            mutation(tx, "Staged", move || git.stage(&path));
+        }
+        Effect::Unstage(path) => {
+            let git = ports.git.clone();
+            mutation(tx, "Unstaged", move || git.unstage(&path));
+        }
+        Effect::Discard { path, untracked } => {
+            let git = ports.git.clone();
+            mutation(tx, "Discarded", move || git.discard(&path, untracked));
+        }
         Effect::Quit => {}
     }
+}
+
+/// Run a working-tree mutation on a thread, reporting via `StatusMutated` so the status view reloads.
+fn mutation<F>(tx: &Sender<Event>, label: &str, f: F)
+where
+    F: FnOnce() -> Result<(), GitError> + Send + 'static,
+{
+    let tx = tx.clone();
+    let label = label.to_string();
+    thread::spawn(move || {
+        let result = f().map_err(|e| e.to_string());
+        let _ = tx.send(Event::StatusMutated { label, result });
+    });
 }
 
 /// Run a fire-and-report action on a thread, sending an `ActionFinished` event with `label`.

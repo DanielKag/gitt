@@ -1,15 +1,21 @@
 //! Pure rendering: `draw(frame, state)` reads only `&AppState` and writes only into the frame.
 //! No I/O, no port calls — so it is exercised directly with ratatui's `TestBackend`.
 
+pub mod components;
+pub mod status;
 pub mod theme;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{List, ListItem, Paragraph};
 
 use crate::domain::{Commit, Ref, View};
 use crate::state::{AppState, Mode, PreviewState};
+
+pub use status::draw_status;
+
+use components::{overlay_menu, preview_pane, truncate};
 
 const DATE_WIDTH: usize = 13;
 const AUTHOR_WIDTH: usize = 16;
@@ -156,14 +162,13 @@ fn refs_label(refs: &[Ref]) -> String {
 }
 
 fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
-    let block = Block::bordered().title("diff");
     let text = match &state.preview {
         PreviewState::Idle => "…".to_string(),
         PreviewState::Loading(_) => "Loading diff…".to_string(),
         PreviewState::Ready { text, .. } => text.clone(),
         PreviewState::Failed { error, .. } => format!("diff failed: {error}"),
     };
-    frame.render_widget(Paragraph::new(text).block(block), area);
+    preview_pane(frame, area, "diff", &text);
 }
 
 fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -178,54 +183,8 @@ fn render_menu(frame: &mut Frame, body: Rect, state: &AppState) {
     let Some(menu) = &state.menu else { return };
 
     let title = format!(" {} {} ", menu.short, truncate(&menu.subject, 30));
-    let width = menu
-        .items
-        .iter()
-        .map(|a| a.label().len())
-        .max()
-        .unwrap_or(10)
-        .max(title.len())
-        + 4;
-    let height = menu.items.len() + 2;
-    let area = centered_rect(body, width as u16, height as u16);
-
-    let items: Vec<ListItem> = menu
-        .items
-        .iter()
-        .enumerate()
-        .map(|(i, action)| {
-            let mut item = ListItem::new(format!(" {}", action.label()));
-            if i == menu.cursor {
-                item = item.style(theme::menu_selected());
-            }
-            item
-        })
-        .collect();
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(List::new(items).block(Block::bordered().title(title)), area);
-}
-
-fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let w = width.min(area.width);
-    let h = height.min(area.height);
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    Rect::new(x, y, w, h)
-}
-
-/// Truncate a string to at most `max` chars, appending `…` when cut.
-fn truncate(s: &str, max: usize) -> String {
-    let count = s.chars().count();
-    if count <= max {
-        s.to_string()
-    } else if max == 0 {
-        String::new()
-    } else {
-        let mut out: String = s.chars().take(max - 1).collect();
-        out.push('…');
-        out
-    }
+    let labels: Vec<&str> = menu.items.iter().map(|a| a.label()).collect();
+    overlay_menu(frame, body, &title, &labels, menu.cursor);
 }
 
 /// Render `state` into a fresh `TestBackend` and return the screen as trimmed text lines.

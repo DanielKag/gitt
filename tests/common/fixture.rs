@@ -44,6 +44,53 @@ impl TempRepo {
         out.trim().to_string()
     }
 
+    /// True if `rel` exists in the working tree (used to check discard of untracked files).
+    pub fn exists(&self, rel: &str) -> bool {
+        self.work.path().join(rel).exists()
+    }
+
+    /// True if `rel` has changes staged in the index (`git diff --cached --name-only`).
+    pub fn is_staged(&self, rel: &str) -> bool {
+        let out = git(self.work.path(), &["diff", "--cached", "--name-only"], NOW);
+        out.lines().any(|l| l == rel)
+    }
+
+    /// A repo with one committed file plus a dirty working tree covering the interesting states:
+    /// a staged-new file (`A `), a modified-unstaged tracked file (` M`), and an untracked file
+    /// (`??`). `git status` sorts by path, so the list order is deterministic:
+    ///   `newstaged.txt`, `tracked.txt`, `untracked.txt`.
+    pub fn with_dirty() -> TempRepo {
+        let work = tempfile::tempdir().unwrap();
+        let origin = tempfile::tempdir().unwrap();
+        let wp = work.path();
+
+        git(wp, &["init", "-b", "main"], NOW);
+        git(wp, &["config", "user.name", "Tester"], NOW);
+        git(wp, &["config", "user.email", "tester@example.com"], NOW);
+
+        std::fs::write(wp.join("tracked.txt"), "original line\n").unwrap();
+        git(wp, &["add", "-A"], NOW);
+        git(wp, &["commit", "-m", "base"], NOW);
+
+        let mut shas = HashMap::new();
+        shas.insert(
+            "base".to_string(),
+            git(wp, &["rev-parse", "HEAD"], NOW).trim().to_string(),
+        );
+
+        // Dirty state:
+        std::fs::write(wp.join("tracked.txt"), "changed line\n").unwrap(); //  M
+        std::fs::write(wp.join("newstaged.txt"), "staged content\n").unwrap();
+        git(wp, &["add", "newstaged.txt"], NOW); // A
+        std::fs::write(wp.join("untracked.txt"), "brand new\n").unwrap(); // ??
+
+        TempRepo {
+            work,
+            _origin: origin,
+            shas,
+        }
+    }
+
     pub fn with_graph() -> TempRepo {
         let work = tempfile::tempdir().unwrap();
         let origin = tempfile::tempdir().unwrap();
