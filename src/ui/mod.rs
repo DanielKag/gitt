@@ -12,12 +12,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
 use crate::domain::{Commit, Ref, View};
-use crate::state::{AppState, Mode, PreviewState};
+use crate::state::model::SUMMARY_ROWS;
+use crate::state::{AppState, Mode, PreviewState, SummaryState};
 
 pub use diff::draw_diff;
 pub use status::draw_status;
 
-use components::{overlay_menu, preview_pane, truncate};
+use components::{overlay_menu, preview_pane, split_code_spans, truncate, wrapped_pane};
 
 const DATE_WIDTH: usize = 13;
 const AUTHOR_WIDTH: usize = 16;
@@ -73,21 +74,69 @@ fn render_search(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
+    // Reserve the bottom rows for the always-on AI summary panel; the rest is the list [+ preview].
+    let rows = Layout::new(
+        Direction::Vertical,
+        [Constraint::Min(1), Constraint::Length(SUMMARY_ROWS)],
+    )
+    .split(area);
+    let main = rows[0];
+
     let (list_area, preview_area) = if state.preview_open {
         let cols = Layout::new(
             Direction::Horizontal,
             [Constraint::Percentage(50), Constraint::Percentage(50)],
         )
-        .split(area);
+        .split(main);
         (cols[0], Some(cols[1]))
     } else {
-        (area, None)
+        (main, None)
     };
 
     render_list(frame, list_area, state);
     if let Some(preview_area) = preview_area {
         render_preview(frame, preview_area, state);
     }
+    render_summary(frame, rows[1], state);
+}
+
+/// The always-visible AI-summary panel for the selected commit. Summary prose renders markdown-style
+/// `code` spans (backticks stripped, styled distinctly); status/hint text is plain.
+fn render_summary(frame: &mut Frame, area: Rect, state: &AppState) {
+    let line = match state.selected_summary() {
+        Some(SummaryState::Ready(text)) => summary_line(text, ""),
+        // While generating: show tokens as they stream; before the first one, a placeholder.
+        Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => {
+            Line::styled("summarizing with ollama…", theme::dim())
+        }
+        Some(SummaryState::Generating(buf)) => summary_line(buf, "▌"),
+        Some(SummaryState::Failed(error)) => {
+            Line::styled(format!("summary failed: {error}"), theme::dim())
+        }
+        // Missing, or not looked up yet.
+        _ => Line::styled("press s for an AI summary", theme::dim()),
+    };
+    wrapped_pane(frame, area, "ai summary", line);
+}
+
+/// Build a summary line: normal prose in the subject style, `code` spans in the code style, with an
+/// optional trailing marker (e.g. a streaming cursor).
+fn summary_line(text: &str, suffix: &str) -> Line<'static> {
+    let mut spans: Vec<Span> = split_code_spans(text)
+        .into_iter()
+        .map(|(seg, is_code)| {
+            let style = if is_code {
+                theme::code()
+            } else {
+                theme::subject()
+            };
+            Span::styled(seg, style)
+        })
+        .collect();
+    if !suffix.is_empty() {
+        spans.push(Span::styled(suffix.to_string(), theme::subject()));
+    }
+    Line::from(spans)
 }
 
 fn render_list(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -175,8 +224,7 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
     let text = state.status.clone().unwrap_or_else(|| {
-        "j/k move · / search · Tab preview · ←/→ view · Enter actions · R fetch · q quit"
-            .to_string()
+        "j/k · /search · Tab preview · s summary · ←/→ view · Enter · R fetch · q quit".to_string()
     });
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
@@ -215,7 +263,7 @@ pub fn render_to_string(state: &AppState, width: u16, height: u16) -> String {
 mod tests {
     use super::*;
     use crate::domain::{Commit, Ref};
-    use crate::state::{Load, MenuAction, PreviewState};
+    use crate::state::{Load, MenuAction, PreviewState, SummaryState};
 
     fn commit(short: &str, rel: &str, author: &str, subject: &str, refs: Vec<Ref>) -> Commit {
         Commit {
@@ -321,6 +369,77 @@ mod tests {
             short: "aaaaaaa".into(),
             subject: "add fuzzy search".into(),
         });
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // SUM-01: with no summary, the panel shows the "press s" hint.
+    #[test]
+    fn sum_01_summary_hint_snapshot() {
+        let s = app();
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // SUM-06: a ready summary is shown (wrapped) in the panel.
+    #[test]
+    fn sum_06_summary_ready_snapshot() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries.insert(
+            hash,
+            SummaryState::Ready(
+                "Adds an in-process fuzzy finder so the commit list filters as you type.".into(),
+            ),
+        );
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // SUM-04/08: generating (placeholder + streaming) and failed states render distinctly.
+    #[test]
+    fn sum_04_summary_generating_snapshot() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries
+            .insert(hash, SummaryState::Generating(String::new()));
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // Request: `code` spans in a summary render with the backticks stripped (styled distinctly).
+    #[test]
+    fn sum_06_summary_code_spans_snapshot() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries.insert(
+            hash,
+            SummaryState::Ready(
+                "Bumps `sled-playwright` from `1.295.0` to `1.307.0` in `package.json`.".into(),
+            ),
+        );
+        let out = render_to_string(&s, 80, 12);
+        assert!(
+            !out.contains('`'),
+            "backticks must be stripped from the rendered panel"
+        );
+        assert!(out.contains("sled-playwright") && out.contains("package.json"));
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn sum_04_summary_streaming_snapshot() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries.insert(
+            hash,
+            SummaryState::Generating("Adds an in-process fuzzy".to_string()),
+        );
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    #[test]
+    fn sum_08_summary_failed_snapshot() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries
+            .insert(hash, SummaryState::Failed("ollama not found".into()));
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 

@@ -5,7 +5,8 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Wrap};
 
 use super::theme;
 
@@ -56,6 +57,31 @@ pub fn preview_pane(frame: &mut Frame, area: Rect, title: &str, text: &str) {
     frame.render_widget(Paragraph::new(text.to_string()).block(block), area);
 }
 
+/// Render a bordered pane whose (already-styled) line wraps to the pane width. Used for the log
+/// screen's AI-summary panel (short prose that must wrap, unlike a diff which keeps its own lines).
+pub fn wrapped_pane(frame: &mut Frame, area: Rect, title: &str, line: Line<'static>) {
+    let block = Block::bordered().title(title.to_string());
+    frame.render_widget(
+        Paragraph::new(line).wrap(Wrap { trim: false }).block(block),
+        area,
+    );
+}
+
+/// Split text into `(segment, is_code)` runs on markdown-style backtick pairs, stripping the
+/// backticks. Text with no backticks — or an odd (unbalanced) number — is returned as a single
+/// non-code run left verbatim, so a stray backtick in a partial/streaming summary never mis-styles.
+pub fn split_code_spans(text: &str) -> Vec<(String, bool)> {
+    let ticks = text.bytes().filter(|&b| b == b'`').count();
+    if ticks == 0 || ticks % 2 != 0 {
+        return vec![(text.to_string(), false)];
+    }
+    text.split('`')
+        .enumerate()
+        .filter(|(_, part)| !part.is_empty())
+        .map(|(i, part)| (part.to_string(), i % 2 == 1))
+        .collect()
+}
+
 /// Truncate a string to at most `max` chars, appending `…` when cut.
 pub fn truncate(s: &str, max: usize) -> String {
     let count = s.chars().count();
@@ -67,5 +93,52 @@ pub fn truncate(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max - 1).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_code_spans;
+
+    #[test]
+    fn no_backticks_is_one_plain_run() {
+        assert_eq!(
+            split_code_spans("just prose here"),
+            vec![("just prose here".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn backtick_pairs_become_code_runs_without_the_backticks() {
+        assert_eq!(
+            split_code_spans("bumps `package.json` to `1.2.0` now"),
+            vec![
+                ("bumps ".to_string(), false),
+                ("package.json".to_string(), true),
+                (" to ".to_string(), false),
+                ("1.2.0".to_string(), true),
+                (" now".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn unbalanced_backtick_left_verbatim() {
+        // A half-streamed summary with one open backtick must not style the tail.
+        assert_eq!(
+            split_code_spans("updates the `yarn.lock"),
+            vec![("updates the `yarn.lock".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn leading_code_span() {
+        assert_eq!(
+            split_code_spans("`main.rs` changed"),
+            vec![
+                ("main.rs".to_string(), true),
+                (" changed".to_string(), false),
+            ]
+        );
     }
 }

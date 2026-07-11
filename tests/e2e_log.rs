@@ -129,6 +129,112 @@ fn log_13_checkout_moves_head() {
     assert_eq!(repo.head(), repo.sha("fix flaky test"));
 }
 
+// SUM-01/03: the AI-summary panel is visible and shows the "press s" hint for the selected commit
+// when nothing is cached yet.
+#[test]
+fn sum_01_03_summary_panel_shows_hint() {
+    let repo = TempRepo::with_graph();
+    let mut tui = Tui::spawn(repo.path());
+    tui.wait_for("local only change");
+    tui.wait_for("ai summary");
+    tui.wait_for("press s for an AI summary");
+
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
+// SUM-04/05/06: pressing `s` generates a summary (via the fake summarizer), the panel shows it, and
+// the prompt actually sent to the model carried the commit subject and its diff.
+#[test]
+fn sum_04_06_generate_shows_summary_and_builds_prompt() {
+    let repo = TempRepo::with_graph();
+    let mut tui = Tui::spawn_cmd_env(
+        repo.path(),
+        "log",
+        &[("GITT_FAKE_SUMMARY", "This commit adds a local-only change.")],
+    );
+    tui.wait_for("local only change");
+    tui.wait_for("press s for an AI summary");
+
+    tui.send_str("s");
+    // The (fake) summarizer streams its text into the panel.
+    tui.wait_for("This commit adds a local-only change.");
+
+    // The context fed to the model: the subject and the commit's diff (touches file.txt).
+    let prompt = tui.sink("summary_prompt.txt");
+    assert!(
+        prompt.contains("local only change"),
+        "prompt subject:\n{prompt}"
+    );
+    assert!(
+        prompt.contains("file.txt"),
+        "prompt diff context:\n{prompt}"
+    );
+
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
+// SUM-06: a generated summary is cached on disk (keyed by commit SHA) and reused by a later run
+// without calling the model again. The second run uses a *different* fake, yet the panel shows the
+// first run's cached text on selection — proving the cache hit.
+#[test]
+fn sum_06_summary_is_cached_across_runs() {
+    let repo = TempRepo::with_graph();
+    let cache = tempfile::tempdir().unwrap();
+    let cache_dir = cache.path().to_str().unwrap();
+
+    {
+        let mut tui = Tui::spawn_cmd_env(
+            repo.path(),
+            "log",
+            &[
+                ("GITT_FAKE_SUMMARY", "First generated summary."),
+                ("GITT_CACHE_DIR", cache_dir),
+            ],
+        );
+        tui.wait_for("local only change");
+        tui.send_str("s");
+        tui.wait_for("First generated summary.");
+        tui.send_str("q");
+        tui.wait_exit();
+    }
+
+    {
+        let mut tui = Tui::spawn_cmd_env(
+            repo.path(),
+            "log",
+            &[
+                ("GITT_FAKE_SUMMARY", "SECOND summary must not appear."),
+                ("GITT_CACHE_DIR", cache_dir),
+            ],
+        );
+        // No `s` pressed: the cached summary loads automatically on selection.
+        tui.wait_for("local only change");
+        tui.wait_for("First generated summary.");
+        tui.send_str("q");
+        tui.wait_exit();
+    }
+}
+
+// SUM-08: a generation failure surfaces on the panel without crashing.
+#[test]
+fn sum_08_generation_failure_shows_on_panel() {
+    let repo = TempRepo::with_graph();
+    let mut tui = Tui::spawn_cmd_env(
+        repo.path(),
+        "log",
+        &[("GITT_FAKE_SUMMARY_ERROR", "model unavailable")],
+    );
+    tui.wait_for("local only change");
+
+    tui.send_str("s");
+    tui.wait_for("summary failed");
+
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
 // LOG-19: running outside a git repo exits non-zero with a clear message (no TUI).
 #[test]
 fn log_19_not_a_git_repo() {

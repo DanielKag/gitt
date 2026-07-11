@@ -19,6 +19,10 @@ pub enum Effect {
     OpenBrowser(String),
     /// Open the pull request for a commit hash (via `gh`).
     OpenPr(String),
+    /// Look up a commit's AI summary in the on-disk cache (cheap; no model call).
+    LoadSummary { hash: String },
+    /// Generate a commit's AI summary: fetch its diff, prompt the model, cache the result.
+    GenerateSummary { hash: String, subject: String },
 
     // --- gitt status ---------------------------------------------------------------------------
     /// Load (or reload) the working-tree status.

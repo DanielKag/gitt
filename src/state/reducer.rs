@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::effect::Effect;
 use super::event::Event;
-use super::model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState};
+use super::model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState, SummaryState};
 use crate::domain::{View, url};
 
 /// Fold an event into the state, returning the side effects the shell must perform.
@@ -20,9 +20,7 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
             state.logs.insert(view, Load::Loaded(commits));
             if view == state.view {
                 state.recompute_matches();
-                if state.preview_open {
-                    return request_diff(state);
-                }
+                return on_selection_changed(state);
             }
             vec![]
         }
@@ -63,6 +61,39 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
                 Ok(()) => label,
                 Err(e) => format!("{label} failed: {e}"),
             });
+            vec![]
+        }
+        // Cache hit. `or_insert`: never clobber a `Generating`/`Ready`/`Failed` state — if the user
+        // pressed `s` while this cache read was in flight, that generation's result must win.
+        Event::SummaryLoaded { hash, text } => {
+            state
+                .summaries
+                .entry(hash)
+                .or_insert(SummaryState::Ready(text));
+            vec![]
+        }
+        // Cache miss; same `or_insert` guard against a racing generation.
+        Event::SummaryMissing { hash } => {
+            state.summaries.entry(hash).or_insert(SummaryState::Missing);
+            vec![]
+        }
+        // A streamed token: append to the partial summary, but only while still generating (ignore
+        // late chunks that arrive after the state moved on).
+        Event::SummaryChunk { hash, delta } => {
+            if let Some(SummaryState::Generating(buf)) = state.summaries.get_mut(&hash) {
+                buf.push_str(&delta);
+            }
+            vec![]
+        }
+        // A freshly generated summary is authoritative → overwrite (the panel shows it; the status
+        // line is left alone so the keymap legend stays visible).
+        Event::SummaryReady { hash, text } => {
+            state.summaries.insert(hash, SummaryState::Ready(text));
+            vec![]
+        }
+        // Failures surface in the panel (per selected commit), not the status line.
+        Event::SummaryFailed { hash, error } => {
+            state.summaries.insert(hash, SummaryState::Failed(error));
             vec![]
         }
         // Status- and diff-screen events never reach the log reducer at runtime (separate screens);
@@ -114,6 +145,7 @@ fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             vec![]
         }
         KeyCode::Tab => toggle_preview(state),
+        KeyCode::Char('s') => summarize_selected(state),
         KeyCode::Char('R') => {
             state.status = Some("fetching…".to_string());
             vec![Effect::Fetch]
@@ -187,8 +219,8 @@ fn set_cursor(state: &mut AppState, idx: usize) -> Vec<Effect> {
     let before = state.selected_hash();
     state.cursor = idx.min(state.matches.len() - 1);
     state.clamp_scroll();
-    if state.preview_open && state.selected_hash() != before {
-        request_diff(state)
+    if state.selected_hash() != before {
+        on_selection_changed(state)
     } else {
         vec![]
     }
@@ -208,9 +240,9 @@ fn switch_view(state: &mut AppState, view: View) -> Vec<Effect> {
         state.logs.insert(view, Load::Loading);
         effects.push(Effect::LoadLog(view));
     }
-    if state.preview_open {
-        effects.extend(request_diff(state));
-    }
+    // If the new view is already loaded, refresh preview + summary for its selection now; otherwise
+    // that happens when its `LogLoaded` arrives.
+    effects.extend(on_selection_changed(state));
     effects
 }
 
@@ -239,12 +271,56 @@ fn request_diff(state: &mut AppState) -> Vec<Effect> {
 }
 
 fn after_filter_change(state: &mut AppState) -> Vec<Effect> {
+    let before = state.selected_hash();
     state.recompute_matches();
-    if state.preview_open {
-        request_diff(state)
+    if state.selected_hash() != before {
+        on_selection_changed(state)
     } else {
         vec![]
     }
+}
+
+/// Effects to run when the selected commit may have changed: load its cached summary (if not already
+/// tracked) and, when the preview is open, reload its diff.
+fn on_selection_changed(state: &mut AppState) -> Vec<Effect> {
+    let mut effects = request_summary(state);
+    if state.preview_open {
+        effects.extend(request_diff(state));
+    }
+    effects
+}
+
+/// Ask the shell to load the selected commit's summary from cache — but only the first time we see
+/// this commit, so rapid navigation doesn't re-request commits we already know the state of.
+fn request_summary(state: &AppState) -> Vec<Effect> {
+    match state.selected() {
+        Some(commit) if !state.summaries.contains_key(&commit.hash) => {
+            vec![Effect::LoadSummary {
+                hash: commit.hash.clone(),
+            }]
+        }
+        _ => vec![],
+    }
+}
+
+/// `s`: (re)generate the selected commit's summary via the model, unless one is already generating.
+/// Progress and result show in the panel; the status line (keymap legend) is left untouched.
+fn summarize_selected(state: &mut AppState) -> Vec<Effect> {
+    let Some(commit) = state.selected() else {
+        return vec![];
+    };
+    let hash = commit.hash.clone();
+    let subject = commit.subject.clone();
+    if matches!(
+        state.summaries.get(&hash),
+        Some(SummaryState::Generating(_))
+    ) {
+        return vec![]; // SUM-09: don't fire a duplicate generation.
+    }
+    state
+        .summaries
+        .insert(hash.clone(), SummaryState::Generating(String::new()));
+    vec![Effect::GenerateSummary { hash, subject }]
 }
 
 fn open_menu(state: &mut AppState) -> Vec<Effect> {
@@ -394,7 +470,7 @@ mod tests {
     #[test]
     fn log_06_ctrl_d_u_half_page() {
         let mut s = app();
-        s.size = (80, 8); // viewport_rows = 5, half = 2
+        s.size = (80, 11); // viewport_rows = 11 - CHROME(3) - SUMMARY(4) = 4, half = 2
         s.recompute_matches();
         drive(&mut s, vec![ctrl('d')]);
         assert_eq!(s.cursor, 2);
@@ -455,10 +531,22 @@ mod tests {
                 commits: vec![commit("eeeeeee", "origin tip")],
             },
         );
-        // Go back to head, then to origin again: no new LoadLog (cached).
+        // Pre-seed the summaries for both views' top commits so re-selecting a cached view emits no
+        // summary lookup either — restoring the strong guarantee that a cached view produces NO
+        // effects at all (not just no LoadLog).
+        for short in ["aaaaaaa", "eeeeeee"] {
+            let hash = format!("{short}{}", "0".repeat(40 - short.len()));
+            s.summaries
+                .insert(hash, SummaryState::Ready("cached".into()));
+        }
+        // Go back to head, then to origin again: fully cached → no effects whatsoever.
         update(&mut s, key(KeyCode::Left));
         let effects = update(&mut s, key(KeyCode::Right));
-        assert_eq!(effects, vec![]);
+        assert_eq!(
+            effects,
+            vec![],
+            "a fully-cached view re-switch must emit no effects"
+        );
         assert_eq!(s.commits()[0].subject, "origin tip");
     }
 
@@ -619,6 +707,243 @@ mod tests {
         let effects = update(&mut s2, ctrl('c'));
         assert!(s2.should_quit);
         assert_eq!(effects, vec![Effect::Quit]);
+    }
+
+    // SUM-02/03: the initial log load requests a cache lookup for the selected commit; a miss records
+    // `Missing` (so the panel shows the hint) and is not re-requested.
+    #[test]
+    fn sum_02_03_initial_load_requests_summary_and_records_miss() {
+        let mut s = AppState::new("feature".into(), "main".into(), None);
+        s.size = (80, 24);
+        let effects = update(
+            &mut s,
+            Event::LogLoaded {
+                view: View::LocalHead,
+                commits: vec![commit("aaaaaaa", "add fuzzy search")],
+            },
+        );
+        let hash = s.selected_hash().unwrap();
+        assert_eq!(effects, vec![Effect::LoadSummary { hash: hash.clone() }]);
+
+        update(&mut s, Event::SummaryMissing { hash: hash.clone() });
+        assert_eq!(s.summaries.get(&hash), Some(&SummaryState::Missing));
+
+        // Moving away and back must not re-request a commit whose state we already know.
+        drive(&mut s, vec![ch('j')]); // only one commit → no move, but exercise the path
+        let effects = request_summary(&s);
+        assert_eq!(effects, vec![], "known commit is not re-requested");
+    }
+
+    // SUM-02: a cache hit (SummaryLoaded) shows the summary immediately (Ready), no generation.
+    #[test]
+    fn sum_02_cache_hit_sets_ready() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        update(
+            &mut s,
+            Event::SummaryLoaded {
+                hash: hash.clone(),
+                text: "Adds fuzzy search to the log.".into(),
+            },
+        );
+        assert_eq!(
+            s.selected_summary(),
+            Some(&SummaryState::Ready("Adds fuzzy search to the log.".into()))
+        );
+    }
+
+    // A slow cache read landing after a user-triggered generation must not clobber the fresh result.
+    #[test]
+    fn sum_cache_read_does_not_clobber_generation() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        update(&mut s, ch('s')); // Generating
+        update(
+            &mut s,
+            Event::SummaryReady {
+                hash: hash.clone(),
+                text: "fresh".into(),
+            },
+        );
+        // A late cache hit for the same commit arrives after generation already completed.
+        update(
+            &mut s,
+            Event::SummaryLoaded {
+                hash: hash.clone(),
+                text: "stale-cached".into(),
+            },
+        );
+        assert_eq!(
+            s.summaries.get(&hash),
+            Some(&SummaryState::Ready("fresh".into())),
+            "a late cache read must not overwrite the fresh generated summary"
+        );
+    }
+
+    // Summary progress/failure lives in the panel, not the status line — so the keymap legend stays
+    // visible throughout generation (no `status` writes on `s`, chunk, ready, or failure).
+    #[test]
+    fn sum_generation_never_touches_status_line() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        update(&mut s, ch('s'));
+        assert_eq!(s.status, None, "`s` must not overwrite the legend");
+        update(
+            &mut s,
+            Event::SummaryChunk {
+                hash: hash.clone(),
+                delta: "x".into(),
+            },
+        );
+        update(
+            &mut s,
+            Event::SummaryReady {
+                hash: hash.clone(),
+                text: "done".into(),
+            },
+        );
+        assert_eq!(s.status, None, "completion must not touch the status line");
+
+        update(&mut s, ch('s'));
+        update(
+            &mut s,
+            Event::SummaryFailed {
+                hash,
+                error: "boom".into(),
+            },
+        );
+        assert_eq!(s.status, None, "failure shows in the panel, not the legend");
+    }
+
+    // SUM-04: streamed chunks accumulate into the commit's partial summary while generating.
+    #[test]
+    fn sum_04_chunks_stream_into_partial() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        update(&mut s, ch('s'));
+        for delta in ["Adds ", "fuzzy ", "search."] {
+            update(
+                &mut s,
+                Event::SummaryChunk {
+                    hash: hash.clone(),
+                    delta: delta.into(),
+                },
+            );
+        }
+        assert_eq!(
+            s.summaries.get(&hash),
+            Some(&SummaryState::Generating("Adds fuzzy search.".into()))
+        );
+        // A chunk for a commit that isn't generating is ignored (no panic, no state).
+        let other = format!("zzzzzzz{}", "0".repeat(33));
+        update(
+            &mut s,
+            Event::SummaryChunk {
+                hash: other.clone(),
+                delta: "stray".into(),
+            },
+        );
+        assert_eq!(s.summaries.get(&other), None);
+    }
+
+    // SUM-04: `s` starts generation for the selected commit (Generating + GenerateSummary effect).
+    #[test]
+    fn sum_04_s_starts_generation() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        let subject = s.selected().unwrap().subject.clone();
+        let effects = update(&mut s, ch('s'));
+        assert_eq!(
+            effects,
+            vec![Effect::GenerateSummary {
+                hash: hash.clone(),
+                subject
+            }]
+        );
+        assert_eq!(
+            s.summaries.get(&hash),
+            Some(&SummaryState::Generating(String::new()))
+        );
+    }
+
+    // SUM-06: a finished generation stores the summary as Ready.
+    #[test]
+    fn sum_06_generated_summary_becomes_ready() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        update(&mut s, ch('s'));
+        update(
+            &mut s,
+            Event::SummaryReady {
+                hash: hash.clone(),
+                text: "Refactors the parser.".into(),
+            },
+        );
+        assert_eq!(
+            s.summaries.get(&hash),
+            Some(&SummaryState::Ready("Refactors the parser.".into()))
+        );
+    }
+
+    // SUM-08: a failed generation records Failed (shown in the panel); `s` retries.
+    #[test]
+    fn sum_08_failure_records_failed_and_retries() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        update(&mut s, ch('s'));
+        update(
+            &mut s,
+            Event::SummaryFailed {
+                hash: hash.clone(),
+                error: "ollama not found".into(),
+            },
+        );
+        assert_eq!(
+            s.summaries.get(&hash),
+            Some(&SummaryState::Failed("ollama not found".into()))
+        );
+
+        // Retry: `s` re-enters Generating and emits a fresh effect.
+        let effects = update(&mut s, ch('s'));
+        assert_eq!(
+            s.summaries.get(&hash),
+            Some(&SummaryState::Generating(String::new()))
+        );
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::GenerateSummary { .. }]
+        ));
+    }
+
+    // SUM-09: pressing `s` while already generating is ignored (no duplicate effect).
+    #[test]
+    fn sum_09_no_duplicate_generation() {
+        let mut s = app();
+        update(&mut s, ch('s'));
+        let effects = update(&mut s, ch('s'));
+        assert_eq!(effects, vec![], "already generating → ignored");
+    }
+
+    // SUM-03: a late cache-miss must not clobber an in-flight generation.
+    #[test]
+    fn sum_03_miss_does_not_clobber_generating() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        update(&mut s, ch('s')); // Generating
+        update(&mut s, Event::SummaryMissing { hash: hash.clone() });
+        assert_eq!(
+            s.summaries.get(&hash),
+            Some(&SummaryState::Generating(String::new()))
+        );
+    }
+
+    // SUM-04: `s` with no commits selected is a safe no-op.
+    #[test]
+    fn sum_04_no_selection_is_noop() {
+        let mut s = AppState::new("main".into(), "main".into(), None);
+        s.logs.insert(View::LocalHead, Load::Loaded(vec![]));
+        s.recompute_matches();
+        assert_eq!(update(&mut s, ch('s')), vec![]);
     }
 
     #[test]

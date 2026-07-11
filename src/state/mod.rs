@@ -17,7 +17,7 @@ pub use diff::{DiffAction, DiffLoad, DiffMenu, DiffMode, DiffPreview, DiffState}
 pub use diff_reducer::update_diff;
 pub use effect::Effect;
 pub use event::Event;
-pub use model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState};
+pub use model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState, SummaryState};
 pub use reducer::update;
 pub use status::{
     ConfirmDiscard, FileAction, FileMenu, FilePreview, StatusLoad, StatusMode, StatusState,

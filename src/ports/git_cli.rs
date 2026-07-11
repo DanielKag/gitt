@@ -81,12 +81,22 @@ impl GitRepo for RealGit {
         Ok(parse_log(&raw, self.now))
     }
 
-    fn show(&self, hash: &str, color: ColorMode) -> Result<String, GitError> {
+    fn show(
+        &self,
+        hash: &str,
+        color: ColorMode,
+        ignore_whitespace: bool,
+    ) -> Result<String, GitError> {
         let color_arg = match color {
             ColorMode::Always => "--color=always",
             ColorMode::Never => "--no-color",
         };
-        self.run(&["show", color_arg, "--stat", "--patch", hash])
+        let mut args = vec!["show", color_arg, "--stat", "--patch"];
+        if ignore_whitespace {
+            args.push("-w"); // --ignore-all-space
+        }
+        args.push(hash);
+        self.run(&args)
     }
 
     fn fetch(&self) -> Result<(), GitError> {

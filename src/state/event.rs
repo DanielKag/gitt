@@ -26,6 +26,19 @@ pub enum Event {
         result: Result<(), String>,
     },
 
+    // --- gitt log AI summaries -----------------------------------------------------------------
+    /// A cache lookup found an existing summary (fills state only if not already tracked, so it
+    /// can't clobber a generation the user kicked off while the lookup was in flight).
+    SummaryLoaded { hash: String, text: String },
+    /// A cache lookup found no summary for this commit; the user can generate one.
+    SummaryMissing { hash: String },
+    /// A streamed token of an in-flight generation; appended to the commit's partial summary.
+    SummaryChunk { hash: String, delta: String },
+    /// A freshly generated summary (authoritative: overwrites any prior state for the commit).
+    SummaryReady { hash: String, text: String },
+    /// Generating a commit's summary failed.
+    SummaryFailed { hash: String, error: String },
+
     // --- gitt status ---------------------------------------------------------------------------
     /// The working-tree status finished loading.
     StatusLoaded(Vec<StatusEntry>),

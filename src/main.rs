@@ -6,7 +6,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 use gitt::ports::git_cli::{self, RealGit};
-use gitt::ports::system::{RealBrowser, RealClipboard, RealClock, RealPr};
+use gitt::ports::system::{
+    RealBrowser, RealClipboard, RealClock, RealPr, RealSummarizer, RealSummaryCache,
+};
 use gitt::ports::{Clock, Ports};
 use gitt::runtime;
 use gitt::state::{AppState, DiffState, StatusState};
@@ -61,6 +63,8 @@ fn run_log(max_count: usize) -> Result<()> {
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),
+        summarizer: Arc::new(RealSummarizer),
+        summary_cache: Arc::new(RealSummaryCache),
         log_limit: max_count,
     };
 
@@ -84,6 +88,8 @@ fn run_status() -> Result<()> {
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),
+        summarizer: Arc::new(RealSummarizer),
+        summary_cache: Arc::new(RealSummaryCache),
         log_limit: 0,
     };
 
@@ -107,6 +113,8 @@ fn run_diff() -> Result<()> {
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),
+        summarizer: Arc::new(RealSummarizer),
+        summary_cache: Arc::new(RealSummaryCache),
         log_limit: 0,
     };
 

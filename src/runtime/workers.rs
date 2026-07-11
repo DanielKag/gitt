@@ -4,7 +4,8 @@
 use std::sync::mpsc::Sender;
 use std::thread;
 
-use crate::ports::{ColorMode, GitError, Ports};
+use crate::domain::summary::build_prompt;
+use crate::ports::{ColorMode, GitError, GitRepo, Ports, Summarizer, SummaryCache};
 use crate::state::{Effect, Event};
 
 pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
@@ -28,7 +29,7 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
             let git = ports.git.clone();
             let tx = tx.clone();
             thread::spawn(move || {
-                let ev = match git.show(&hash, ColorMode::Never) {
+                let ev = match git.show(&hash, ColorMode::Never, false) {
                     Ok(text) => Event::DiffLoaded { hash, text },
                     Err(e) => Event::DiffFailed {
                         hash,
@@ -61,6 +62,26 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
         Effect::OpenPr(hash) => {
             let pr = ports.pr.clone();
             action(tx, "Opened PR", move || pr.open_pr(&hash));
+        }
+        Effect::LoadSummary { hash } => {
+            let cache = ports.summary_cache.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let ev = match cache.get(&hash) {
+                    Some(text) => Event::SummaryLoaded { hash, text },
+                    None => Event::SummaryMissing { hash },
+                };
+                let _ = tx.send(ev);
+            });
+        }
+        Effect::GenerateSummary { hash, subject } => {
+            let git = ports.git.clone();
+            let summarizer = ports.summarizer.clone();
+            let cache = ports.summary_cache.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                generate_summary(&*git, &*summarizer, &*cache, &hash, &subject, &tx)
+            });
         }
         Effect::LoadStatus => {
             let git = ports.git.clone();
@@ -145,6 +166,63 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
         }
         Effect::Quit => {}
     }
+}
+
+/// Fetch the commit's diff, build the prompt, stream the summary from the model (emitting a
+/// `SummaryChunk` per token so the panel fills in live), then cache the full result and emit
+/// `SummaryReady`. Any failure — including an empty completion — emits `SummaryFailed`.
+fn generate_summary(
+    git: &dyn GitRepo,
+    summarizer: &dyn Summarizer,
+    cache: &dyn SummaryCache,
+    hash: &str,
+    subject: &str,
+    tx: &Sender<Event>,
+) {
+    // Ignore whitespace-only churn: less noise for the model, fewer prompt tokens (faster).
+    let diff = match git.show(hash, ColorMode::Never, true) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = tx.send(Event::SummaryFailed {
+                hash: hash.to_string(),
+                error: e.to_string(),
+            });
+            return;
+        }
+    };
+    let prompt = build_prompt(subject, &diff);
+
+    let mut acc = String::new();
+    let result = summarizer.summarize(&prompt, &mut |tok| {
+        acc.push_str(tok);
+        let _ = tx.send(Event::SummaryChunk {
+            hash: hash.to_string(),
+            delta: tok.to_string(),
+        });
+    });
+
+    let event = match result {
+        // An empty completion is a failure, not a cached empty file (which `get` reads back as a
+        // miss, so the summary would silently never persist).
+        Ok(()) if acc.trim().is_empty() => Event::SummaryFailed {
+            hash: hash.to_string(),
+            error: "ollama returned an empty response".to_string(),
+        },
+        Ok(()) => {
+            let summary = acc.trim().to_string();
+            // Cache write is best-effort: a failure here must not lose the summary for this run.
+            let _ = cache.put(hash, &summary);
+            Event::SummaryReady {
+                hash: hash.to_string(),
+                text: summary,
+            }
+        }
+        Err(e) => Event::SummaryFailed {
+            hash: hash.to_string(),
+            error: e.to_string(),
+        },
+    };
+    let _ = tx.send(event);
 }
 
 /// Run a working-tree mutation on a thread, reporting via `StatusMutated` so the status view reloads.

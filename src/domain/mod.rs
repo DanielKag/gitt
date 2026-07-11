@@ -4,6 +4,7 @@ pub mod commit;
 pub mod diff;
 pub mod main_branch;
 pub mod status;
+pub mod summary;
 pub mod time;
 pub mod url;
 

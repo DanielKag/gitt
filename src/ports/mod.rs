@@ -34,7 +34,15 @@ pub enum GitError {
 /// sees raw text (parsing is a separate pure function tested against fixtures).
 pub trait GitRepo: Send + Sync {
     fn log(&self, view: View, limit: usize) -> Result<Vec<Commit>, GitError>;
-    fn show(&self, hash: &str, color: ColorMode) -> Result<String, GitError>;
+    /// `git show` for a commit. `ignore_whitespace` adds `-w` so whitespace-only churn is dropped —
+    /// used for the AI summary (less noise, fewer prompt tokens); the preview passes `false` to stay
+    /// faithful to the real diff.
+    fn show(
+        &self,
+        hash: &str,
+        color: ColorMode,
+        ignore_whitespace: bool,
+    ) -> Result<String, GitError>;
     fn fetch(&self) -> Result<(), GitError>;
     fn checkout(&self, hash: &str) -> Result<(), GitError>;
 
@@ -79,6 +87,21 @@ pub trait Env: Send + Sync {
     fn has_delta(&self) -> bool;
 }
 
+/// Streams a commit summary from a built prompt, invoking `on_token` for each chunk as it arrives
+/// (real impl calls the local Ollama HTTP API). The accumulated tokens are the full summary.
+pub trait Summarizer: Send + Sync {
+    fn summarize(&self, prompt: &str, on_token: &mut dyn FnMut(&str)) -> Result<(), GitError>;
+}
+
+/// Content-addressed store for commit summaries, keyed by the commit's full SHA (real impl is a
+/// directory of files under the user's cache home).
+pub trait SummaryCache: Send + Sync {
+    /// The cached summary for `key`, if present.
+    fn get(&self, key: &str) -> Option<String>;
+    /// Store `summary` under `key`. Best-effort: a write error is surfaced but not fatal.
+    fn put(&self, key: &str, summary: &str) -> Result<(), GitError>;
+}
+
 /// The bundle of side-effecting ports the runtime dispatches effects to.
 #[derive(Clone)]
 pub struct Ports {
@@ -86,6 +109,10 @@ pub struct Ports {
     pub clipboard: Arc<dyn Clipboard>,
     pub browser: Arc<dyn Browser>,
     pub pr: Arc<dyn PrOpener>,
+    /// Generates commit summaries via the local model.
+    pub summarizer: Arc<dyn Summarizer>,
+    /// On-disk cache for generated summaries.
+    pub summary_cache: Arc<dyn SummaryCache>,
     /// Max commits to load per view.
     pub log_limit: usize,
 }

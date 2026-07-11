@@ -37,6 +37,12 @@ impl Tui {
 
     /// Spawn `gitt <subcommand>` against `repo`, with an isolated HOME and a side-effect sink.
     pub fn spawn_cmd(repo: &Path, subcommand: &str) -> Tui {
+        Self::spawn_cmd_env(repo, subcommand, &[])
+    }
+
+    /// Spawn `gitt <subcommand>` with additional environment variables layered over the deterministic
+    /// defaults (used for feature seams like `GITT_FAKE_SUMMARY` / `GITT_CACHE_DIR`).
+    pub fn spawn_cmd_env(repo: &Path, subcommand: &str, extra: &[(&str, &str)]) -> Tui {
         let home = tempfile::tempdir().unwrap();
         let sink = tempfile::tempdir().unwrap();
 
@@ -60,11 +66,16 @@ impl Tui {
         cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
         cmd.env("HOME", home.path());
         cmd.env("XDG_CONFIG_HOME", home.path());
+        // Isolate the summary cache too, so tests never read/write the developer's real ~/.cache.
+        cmd.env("XDG_CACHE_HOME", home.path());
         cmd.env("GITT_NOW", NOW.to_string());
         cmd.env("GITT_NO_DELTA", "1");
         cmd.env("GITT_TEST_SINK_DIR", sink.path());
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
+        }
+        for (k, v) in extra {
+            cmd.env(k, v);
         }
 
         let child = pair.slave.spawn_command(cmd).unwrap();

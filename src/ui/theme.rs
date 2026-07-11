@@ -29,6 +29,10 @@ pub fn inactive_view() -> Style {
 pub fn dim() -> Style {
     Style::new().add_modifier(Modifier::DIM)
 }
+/// Inline `code` spans in AI summaries: light text on a subtle grey block, like markdown code.
+pub fn code() -> Style {
+    Style::new().fg(Color::Indexed(252)).bg(Color::Indexed(237))
+}
 pub fn menu_selected() -> Style {
     Style::new().add_modifier(Modifier::REVERSED)
 }

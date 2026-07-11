@@ -8,6 +8,9 @@ use crate::fuzzy::{self, MatchEntry};
 /// Rows of "chrome" around the commit list: header (1) + search bar (1) + status (1).
 pub const CHROME_ROWS: u16 = 3;
 
+/// Rows reserved for the always-visible AI summary panel below the list: border (2) + 2 text lines.
+pub const SUMMARY_ROWS: u16 = 4;
+
 /// Input focus / interaction mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -99,6 +102,21 @@ pub enum PreviewState {
     },
 }
 
+/// The AI-summary state of a single commit, keyed by its full SHA in [`AppState::summaries`].
+/// Absence from the map means "not looked up yet".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SummaryState {
+    /// Looked up the cache; nothing there. Press `s` to generate.
+    Missing,
+    /// A generation is in flight (Ollama call running off the UI thread), holding the tokens streamed
+    /// so far (empty until the first token arrives).
+    Generating(String),
+    /// A summary is available (from cache or freshly generated).
+    Ready(String),
+    /// Generation failed; the message is shown and `s` can retry.
+    Failed(String),
+}
+
 /// The whole application state.
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -115,6 +133,8 @@ pub struct AppState {
     pub preview_open: bool,
     pub preview: PreviewState,
     pub menu: Option<ActionMenu>,
+    /// AI summaries keyed by commit full SHA (shared across views).
+    pub summaries: HashMap<String, SummaryState>,
     /// Transient status-line message.
     pub status: Option<String>,
     pub current_branch: String,
@@ -138,6 +158,7 @@ impl AppState {
             preview_open: false,
             preview: PreviewState::Idle,
             menu: None,
+            summaries: HashMap::new(),
             status: None,
             current_branch,
             main_branch,
@@ -147,9 +168,15 @@ impl AppState {
         }
     }
 
-    /// Number of commit rows visible in the list given the current terminal height.
+    /// Number of commit rows visible in the list given the current terminal height. The always-on
+    /// summary panel below the list reserves [`SUMMARY_ROWS`], so the list math must account for it.
     pub fn viewport_rows(&self) -> usize {
-        (self.size.1.saturating_sub(CHROME_ROWS)).max(1) as usize
+        (self.size.1.saturating_sub(CHROME_ROWS + SUMMARY_ROWS)).max(1) as usize
+    }
+
+    /// The AI-summary state for the selected commit, if any is recorded.
+    pub fn selected_summary(&self) -> Option<&SummaryState> {
+        self.summaries.get(&self.selected()?.hash)
     }
 
     /// Loaded commits for the active view (empty slice if not loaded).

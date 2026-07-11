@@ -5,12 +5,13 @@
 //! tests assert on exactly what the real code path produced, without launching a browser or writing
 //! to the real system clipboard.
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{Browser, Clipboard, Clock, Env, GitError, PrOpener};
+use super::{Browser, Clipboard, Clock, Env, GitError, PrOpener, Summarizer, SummaryCache};
+use crate::domain::summary::{ollama_generate_url, ollama_model, resolve_cache_dir};
 
 /// System clock, overridable by `GITT_NOW=<unix>` for deterministic tests.
 pub struct RealClock;
@@ -95,6 +96,150 @@ impl PrOpener for RealPr {
         // Best-effort: ask gh to open the PR associated with this commit in the browser.
         run("gh", &["pr", "view", hash, "--web"])
     }
+}
+
+/// Generates commit summaries via Ollama's HTTP API (`POST /api/generate`, non-streaming), shelling
+/// out to `curl` (consistent with the tool's other subprocess ports). The HTTP API returns clean
+/// text — unlike `ollama run`, whose piped output is polluted with terminal cursor/erase control
+/// codes from its live word-wrapping.
+///
+/// Honors two test seams: `GITT_FAKE_SUMMARY` returns a canned summary without touching ollama, and
+/// (when `GITT_TEST_SINK_DIR` is set) the prompt it *would* have sent is recorded so e2e can assert
+/// the context was built correctly. `GITT_FAKE_SUMMARY_ERROR` forces a deterministic failure.
+pub struct RealSummarizer;
+
+impl Summarizer for RealSummarizer {
+    fn summarize(&self, prompt: &str, on_token: &mut dyn FnMut(&str)) -> Result<(), GitError> {
+        if let Ok(err) = std::env::var("GITT_FAKE_SUMMARY_ERROR") {
+            let _ = write_sink("summary_prompt.txt", prompt);
+            return Err(GitError::Io(err));
+        }
+        if let Ok(fake) = std::env::var("GITT_FAKE_SUMMARY") {
+            let _ = write_sink("summary_prompt.txt", prompt);
+            on_token(&fake);
+            return Ok(());
+        }
+        let model = ollama_model(std::env::var("GITT_OLLAMA_MODEL").ok());
+        let url = ollama_generate_url(std::env::var("OLLAMA_HOST").ok().as_deref());
+        ollama_stream(&url, &model, prompt, on_token)
+    }
+}
+
+/// Stream a completion from Ollama's `/api/generate` (NDJSON, one JSON object per line), invoking
+/// `on_token` for each `response` chunk. Uses `curl` (like the tool's other subprocess ports); the
+/// HTTP API returns clean text, unlike `ollama run` whose piped output carries terminal control codes.
+fn ollama_stream(
+    url: &str,
+    model: &str,
+    prompt: &str,
+    on_token: &mut dyn FnMut(&str),
+) -> Result<(), GitError> {
+    // serde_json handles escaping the prompt (newlines, quotes, unicode) safely. `num_predict` caps
+    // the output length (a summary is short) so a runaway response can't decode forever; a low
+    // `temperature` keeps summaries steady.
+    let body = serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "stream": true,
+        "options": { "num_predict": 200, "temperature": 0.2 },
+    })
+    .to_string();
+
+    let mut child = Command::new("curl")
+        .args([
+            "-sS", // silent, but still report transport errors on stderr
+            "-N",  // no output buffering, so tokens arrive as they stream
+            "-X",
+            "POST",
+            url,
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+            "@-", // read the JSON body from stdin (avoids arg-length limits on big diffs)
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| GitError::Io(format!("curl: {e}")))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| GitError::Io("curl: no stdin".into()))?
+        .write_all(body.as_bytes())
+        .map_err(|e| GitError::Io(e.to_string()))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| GitError::Io("curl: no stdout".into()))?;
+
+    let mut api_error: Option<String> = None;
+    for line in BufReader::new(stdout).lines() {
+        let line = line.map_err(|e| GitError::Io(e.to_string()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        // Each line is an independent JSON object; skip any we can't parse rather than aborting.
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if let Some(err) = obj.get("error").and_then(|v| v.as_str()) {
+            api_error = Some(err.to_string());
+            break;
+        }
+        if let Some(tok) = obj.get("response").and_then(|v| v.as_str())
+            && !tok.is_empty()
+        {
+            on_token(tok);
+        }
+        if obj.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+            break;
+        }
+    }
+
+    let status = child.wait().map_err(|e| GitError::Io(e.to_string()))?;
+    if let Some(err) = api_error {
+        return Err(GitError::Io(format!("ollama: {err}")));
+    }
+    if !status.success() {
+        let mut stderr = String::new();
+        if let Some(mut se) = child.stderr.take() {
+            let _ = se.read_to_string(&mut stderr);
+        }
+        return Err(GitError::Io(format!(
+            "ollama request failed (is `ollama serve` running at {url}?): {}",
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Filesystem-backed summary cache: one file per commit SHA under the resolved cache directory.
+pub struct RealSummaryCache;
+
+impl SummaryCache for RealSummaryCache {
+    fn get(&self, key: &str) -> Option<String> {
+        let contents = std::fs::read_to_string(summary_cache_dir()?.join(key)).ok()?;
+        let trimmed = contents.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
+    fn put(&self, key: &str, summary: &str) -> Result<(), GitError> {
+        let dir = summary_cache_dir()
+            .ok_or_else(|| GitError::Io("no cache directory (HOME unset)".into()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| GitError::Io(e.to_string()))?;
+        std::fs::write(dir.join(key), summary).map_err(|e| GitError::Io(e.to_string()))
+    }
+}
+
+/// The summary cache directory, resolved from the environment (pure logic in `domain::summary`).
+fn summary_cache_dir() -> Option<PathBuf> {
+    resolve_cache_dir(
+        std::env::var("GITT_CACHE_DIR").ok().as_deref(),
+        std::env::var("XDG_CACHE_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
 }
 
 // --- OS helpers ----------------------------------------------------------------------------------
