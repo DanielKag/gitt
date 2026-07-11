@@ -99,6 +99,50 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
             let git = ports.git.clone();
             mutation(tx, "Discarded", move || git.discard(&path, untracked));
         }
+        Effect::LoadDiffFiles(scope) => {
+            let git = ports.git.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let ev = match git.diff_files(scope) {
+                    Ok(files) => Event::DiffFilesLoaded { scope, files },
+                    Err(e) => Event::DiffFilesFailed {
+                        scope,
+                        error: e.to_string(),
+                    },
+                };
+                let _ = tx.send(ev);
+            });
+        }
+        Effect::LoadDiffText { scope, path } => {
+            let git = ports.git.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let ev = match git.diff_scope_file(scope, &path) {
+                    Ok(text) => Event::DiffTextLoaded { scope, path, text },
+                    Err(e) => Event::DiffTextFailed {
+                        scope,
+                        path,
+                        error: e.to_string(),
+                    },
+                };
+                let _ = tx.send(ev);
+            });
+        }
+        Effect::CopyScopeDiff { scope, path } => {
+            let git = ports.git.clone();
+            let cb = ports.clipboard.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let result = git
+                    .diff_scope_file(scope, &path)
+                    .and_then(|text| cb.copy(&text))
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(Event::ActionFinished {
+                    label: "Copied diff".to_string(),
+                    result,
+                });
+            });
+        }
         Effect::Quit => {}
     }
 }

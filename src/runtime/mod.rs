@@ -14,7 +14,7 @@ use anyhow::Result;
 use ratatui::Frame;
 
 use crate::ports::Ports;
-use crate::state::{AppState, Effect, Event, Load, StatusLoad, StatusState};
+use crate::state::{AppState, DiffLoad, DiffState, Effect, Event, Load, StatusLoad, StatusState};
 use crate::ui;
 use terminal::TerminalGuard;
 
@@ -61,6 +61,22 @@ impl Screen for StatusState {
     fn init_effects(&mut self) -> Vec<Effect> {
         self.load = StatusLoad::Loading;
         vec![Effect::LoadStatus]
+    }
+}
+
+impl Screen for DiffState {
+    fn update(&mut self, event: Event) -> Vec<Effect> {
+        crate::state::update_diff(self, event)
+    }
+    fn draw(&self, frame: &mut Frame) {
+        ui::draw_diff(frame, self);
+    }
+    fn should_quit(&self) -> bool {
+        self.should_quit
+    }
+    fn init_effects(&mut self) -> Vec<Effect> {
+        self.loads.insert(self.scope, DiffLoad::Loading);
+        vec![Effect::LoadDiffFiles(self.scope)]
     }
 }
 

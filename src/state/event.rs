@@ -1,7 +1,7 @@
 //! Events: everything that can drive the reducer. Terminal input plus async results routed back
 //! from the shell's worker threads.
 
-use crate::domain::{Commit, StatusEntry, View};
+use crate::domain::{Commit, DiffFile, DiffScope, StatusEntry, View};
 use crossterm::event::KeyEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,5 +39,26 @@ pub enum Event {
     StatusMutated {
         label: String,
         result: Result<(), String>,
+    },
+
+    // --- gitt diff -----------------------------------------------------------------------------
+    /// A scope's changed-file list finished loading.
+    DiffFilesLoaded {
+        scope: DiffScope,
+        files: Vec<DiffFile>,
+    },
+    /// A scope's changed-file list failed to load.
+    DiffFilesFailed { scope: DiffScope, error: String },
+    /// A file's diff text (for a scope) finished loading, for the diff pane.
+    DiffTextLoaded {
+        scope: DiffScope,
+        path: String,
+        text: String,
+    },
+    /// A file's diff text failed to load.
+    DiffTextFailed {
+        scope: DiffScope,
+        path: String,
+        error: String,
     },
 }

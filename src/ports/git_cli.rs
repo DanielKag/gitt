@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{ColorMode, GitError, GitRepo};
-use crate::domain::{Commit, DiffKind, StatusEntry, View, main_branch::resolve_main_branch};
+use crate::domain::{
+    Commit, DiffFile, DiffKind, DiffScope, StatusEntry, View, main_branch::resolve_main_branch,
+};
+use crate::parse::diff::parse_diff_name_status;
 use crate::parse::log::{PRETTY_FORMAT, parse_log};
 use crate::parse::remote::parse_remote_show;
 use crate::parse::status::{STATUS_ARGS, parse_status};
@@ -27,6 +30,35 @@ impl RealGit {
 
     fn run(&self, args: &[&str]) -> Result<String, GitError> {
         run_git(&self.dir, args)
+    }
+
+    /// The base revision the `Branch` scope diffs against: `origin/<main>` when that ref exists
+    /// (matching how GitHub compares a PR to the remote base), otherwise the local `<main>`.
+    fn branch_base(&self) -> String {
+        let origin = format!("origin/{}", self.main_branch);
+        if self.ref_exists(&origin) {
+            origin
+        } else {
+            self.main_branch.clone()
+        }
+    }
+
+    /// True if `rev` resolves to an object (used to pick the `Branch` base ref).
+    fn ref_exists(&self, rev: &str) -> bool {
+        self.run(&["rev-parse", "--verify", "--quiet", rev])
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    /// The revision argument(s) that select a scope's diff, e.g. `["--staged"]`, `["HEAD"]`, or the
+    /// three-dot `["<base>...HEAD"]`. The unstaged scope needs no revision argument.
+    fn scope_revs(&self, scope: DiffScope) -> Vec<String> {
+        match scope {
+            DiffScope::Unstaged => vec![],
+            DiffScope::Staged => vec!["--staged".to_string()],
+            DiffScope::Working => vec!["HEAD".to_string()],
+            DiffScope::Branch => vec![format!("{}...HEAD", self.branch_base())],
+        }
     }
 }
 
@@ -95,6 +127,23 @@ impl GitRepo for RealGit {
         } else {
             self.run(&["restore", "--", path]).map(|_| ())
         }
+    }
+
+    fn diff_files(&self, scope: DiffScope) -> Result<Vec<DiffFile>, GitError> {
+        let mut args: Vec<&str> = vec!["diff", "--name-status", "-z", "--no-color"];
+        let revs = self.scope_revs(scope);
+        args.extend(revs.iter().map(String::as_str));
+        let raw = self.run(&args)?;
+        Ok(parse_diff_name_status(&raw))
+    }
+
+    fn diff_scope_file(&self, scope: DiffScope, path: &str) -> Result<String, GitError> {
+        let mut args: Vec<&str> = vec!["diff", "--no-color"];
+        let revs = self.scope_revs(scope);
+        args.extend(revs.iter().map(String::as_str));
+        args.push("--");
+        args.push(path);
+        self.run(&args)
     }
 }
 

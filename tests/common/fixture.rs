@@ -91,6 +91,35 @@ impl TempRepo {
         }
     }
 
+    /// A repo with a `main` baseline and a `feature` branch one commit ahead, its working tree clean.
+    /// So `git diff main...HEAD` (the `gitt diff` vs-main scope) shows the feature commit's file,
+    /// while the unstaged/staged/working scopes are empty — exercising the PR "Files changed" view.
+    pub fn with_feature_branch() -> TempRepo {
+        let work = tempfile::tempdir().unwrap();
+        let origin = tempfile::tempdir().unwrap();
+        let wp = work.path();
+
+        git(wp, &["init", "-b", "main"], NOW);
+        git(wp, &["config", "user.name", "Tester"], NOW);
+        git(wp, &["config", "user.email", "tester@example.com"], NOW);
+
+        std::fs::write(wp.join("base.txt"), "base\n").unwrap();
+        git(wp, &["add", "-A"], NOW);
+        git(wp, &["commit", "-m", "base"], NOW);
+
+        // A feature branch, one commit ahead of main.
+        git(wp, &["checkout", "-b", "feature"], NOW);
+        std::fs::write(wp.join("feature.txt"), "feature work\n").unwrap();
+        git(wp, &["add", "-A"], NOW);
+        git(wp, &["commit", "-m", "add feature"], NOW);
+
+        TempRepo {
+            work,
+            _origin: origin,
+            shas: HashMap::new(),
+        }
+    }
+
     pub fn with_graph() -> TempRepo {
         let work = tempfile::tempdir().unwrap();
         let origin = tempfile::tempdir().unwrap();

@@ -2,6 +2,7 @@
 //! No I/O, no port calls — so it is exercised directly with ratatui's `TestBackend`.
 
 pub mod components;
+pub mod diff;
 pub mod status;
 pub mod theme;
 
@@ -13,6 +14,7 @@ use ratatui::widgets::{List, ListItem, Paragraph};
 use crate::domain::{Commit, Ref, View};
 use crate::state::{AppState, Mode, PreviewState};
 
+pub use diff::draw_diff;
 pub use status::draw_status;
 
 use components::{overlay_menu, preview_pane, truncate};

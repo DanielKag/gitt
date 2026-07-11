@@ -43,3 +43,17 @@ pub fn unstaged() -> Style {
 pub fn untracked() -> Style {
     Style::new().fg(Color::Red).add_modifier(Modifier::DIM)
 }
+
+// --- gitt diff change badges (git's diffstat convention: added green, deleted red, modified yellow)
+pub fn added() -> Style {
+    Style::new().fg(Color::Green)
+}
+pub fn deleted() -> Style {
+    Style::new().fg(Color::Red)
+}
+pub fn modified() -> Style {
+    Style::new().fg(Color::Yellow)
+}
+pub fn renamed() -> Style {
+    Style::new().fg(Color::Cyan)
+}

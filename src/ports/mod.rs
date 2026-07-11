@@ -7,7 +7,7 @@ pub mod system;
 
 use std::sync::Arc;
 
-use crate::domain::{Commit, DiffKind, StatusEntry, View};
+use crate::domain::{Commit, DiffFile, DiffKind, DiffScope, StatusEntry, View};
 
 /// Whether git output should include ANSI color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +49,12 @@ pub trait GitRepo: Send + Sync {
     fn unstage(&self, path: &str) -> Result<(), GitError>;
     /// Discard a file's changes: restore a tracked file, or delete an untracked one.
     fn discard(&self, path: &str, untracked: bool) -> Result<(), GitError>;
+
+    // --- gitt diff ---------------------------------------------------------------------------------
+    /// The changed files for a diff scope (parsed `git diff --name-status -z <scope-args>`).
+    fn diff_files(&self, scope: DiffScope) -> Result<Vec<DiffFile>, GitError>;
+    /// The plain-text diff of one file for a scope (`git diff <scope-args> -- <path>`).
+    fn diff_scope_file(&self, scope: DiffScope, path: &str) -> Result<String, GitError>;
 }
 
 /// A source of "now" (unix seconds) — injected so relative dates are deterministic in tests.

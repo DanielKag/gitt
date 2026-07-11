@@ -9,7 +9,7 @@ use gitt::ports::git_cli::{self, RealGit};
 use gitt::ports::system::{RealBrowser, RealClipboard, RealClock, RealPr};
 use gitt::ports::{Clock, Ports};
 use gitt::runtime;
-use gitt::state::{AppState, StatusState};
+use gitt::state::{AppState, DiffState, StatusState};
 
 #[derive(Parser)]
 #[command(name = "gitt", version, about = "Git-ty — an interactive git TUI")]
@@ -28,6 +28,8 @@ enum Command {
     },
     /// Stage, unstage, diff, and discard working-tree changes interactively.
     Status,
+    /// Browse changes interactively: unstaged, staged, working-tree, or vs the main branch.
+    Diff,
 }
 
 fn main() -> Result<()> {
@@ -35,6 +37,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Log { max_count } => run_log(max_count),
         Command::Status => run_status(),
+        Command::Diff => run_diff(),
     }
 }
 
@@ -78,6 +81,29 @@ fn run_status() -> Result<()> {
     // placeholders; the same `Ports`/`RealGit` seam is reused so effect dispatch is identical.
     let ports = Ports {
         git: Arc::new(RealGit::new(dir, "main".to_string(), 0)),
+        clipboard: Arc::new(RealClipboard),
+        browser: Arc::new(RealBrowser),
+        pr: Arc::new(RealPr),
+        log_limit: 0,
+    };
+
+    runtime::run(state, ports)
+}
+
+fn run_diff() -> Result<()> {
+    let dir = std::env::current_dir().context("cannot determine current directory")?;
+
+    if !git_cli::is_git_repo(&dir) {
+        bail!("not a git repository (or any of the parent directories)");
+    }
+
+    let main_branch = git_cli::detect_main_branch(&dir);
+    let state = DiffState::new(main_branch.clone());
+
+    // The diff viewer is read-only and shows no relative dates, so the clock is a placeholder; the
+    // same `Ports`/`RealGit` seam is reused so effect dispatch is identical to the other screens.
+    let ports = Ports {
+        git: Arc::new(RealGit::new(dir, main_branch, 0)),
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),

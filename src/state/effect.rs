@@ -1,7 +1,7 @@
 //! Effects: the reducer's only output besides mutating state. The shell (`runtime`) executes these
 //! and feeds results back as [`crate::state::Event`]s. The reducer itself performs no I/O.
 
-use crate::domain::{DiffKind, View};
+use crate::domain::{DiffKind, DiffScope, View};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
@@ -31,6 +31,14 @@ pub enum Effect {
     Unstage(String),
     /// Discard a file's changes (`git restore` for tracked, delete for untracked).
     Discard { path: String, untracked: bool },
+
+    // --- gitt diff -----------------------------------------------------------------------------
+    /// Load (or reload) the changed-file list for a diff scope.
+    LoadDiffFiles(DiffScope),
+    /// Load a file's diff text (for a scope) into the diff pane.
+    LoadDiffText { scope: DiffScope, path: String },
+    /// Load a file's diff text (for a scope) and copy it to the clipboard.
+    CopyScopeDiff { scope: DiffScope, path: String },
 
     /// Quit the application.
     Quit,
