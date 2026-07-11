@@ -123,7 +123,6 @@ fn on_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         Mode::List => on_key_list(state, key),
         Mode::Search => on_key_search(state, key),
         Mode::Menu => on_key_menu(state, key),
-        Mode::Summary => on_key_summary(state, key),
     }
 }
 
@@ -150,7 +149,11 @@ fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Tab => toggle_preview(state),
         KeyCode::Char('s') => summarize_selected(state),
-        KeyCode::Char('S') => open_summary_modal(state),
+        KeyCode::Char('S') => {
+            state.summary_expanded = !state.summary_expanded;
+            state.clamp_scroll(); // the list viewport just changed size
+            vec![]
+        }
         KeyCode::Char('R') => {
             state.status = Some("fetching…".to_string());
             vec![Effect::Fetch]
@@ -198,18 +201,6 @@ fn on_key_menu(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Enter => execute_menu(state),
         _ => vec![],
     }
-}
-
-/// The expanded-summary modal is view-only: any of Esc/q/S/Enter dismisses it; everything else is
-/// ignored (the summary keeps streaming underneath via `SummaryChunk` events regardless).
-fn on_key_summary(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
-    if matches!(
-        key.code,
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('S') | KeyCode::Enter
-    ) {
-        state.mode = Mode::List;
-    }
-    vec![]
 }
 
 // --- helpers -------------------------------------------------------------------------------------
@@ -338,14 +329,6 @@ fn summarize_selected(state: &mut AppState) -> Vec<Effect> {
         .summaries
         .insert(hash.clone(), SummaryState::Generating(String::new()));
     vec![Effect::GenerateSummary { hash, subject }]
-}
-
-/// `S`: open the expanded-summary modal for the selected commit (no-op if nothing is selected).
-fn open_summary_modal(state: &mut AppState) -> Vec<Effect> {
-    if state.selected().is_some() {
-        state.mode = Mode::Summary;
-    }
-    vec![]
 }
 
 fn open_menu(state: &mut AppState) -> Vec<Effect> {
@@ -962,28 +945,54 @@ mod tests {
         );
     }
 
-    // `S` opens the expanded-summary modal; Esc (or S/q/Enter) closes it back to List.
+    // `S` toggles the expanded summary footer in place — the screen stays in List mode so navigation
+    // still works — and `Esc` does NOT collapse it.
     #[test]
-    fn sum_modal_open_and_close() {
+    fn sum_s_toggles_expanded_footer() {
         let mut s = app();
+        assert!(!s.summary_expanded);
         update(&mut s, ch('S'));
-        assert_eq!(s.mode, Mode::Summary);
-        update(&mut s, key(KeyCode::Esc));
-        assert_eq!(s.mode, Mode::List);
+        assert!(s.summary_expanded);
+        assert_eq!(s.mode, Mode::List, "still in List mode → navigation works");
 
+        // Esc must not collapse it.
+        update(&mut s, key(KeyCode::Esc));
+        assert!(s.summary_expanded, "Esc does not minimize");
+
+        // S again collapses.
         update(&mut s, ch('S'));
-        assert_eq!(s.mode, Mode::Summary);
-        update(&mut s, ch('S')); // toggles closed
-        assert_eq!(s.mode, Mode::List);
+        assert!(!s.summary_expanded);
     }
 
+    // Expanding grows the footer for a long summary, shrinking the list viewport; the reducer's
+    // scroll math stays consistent (cursor remains visible).
     #[test]
-    fn sum_modal_no_selection_is_noop() {
-        let mut s = AppState::new("main".into(), "main".into(), None);
-        s.logs.insert(View::LocalHead, Load::Loaded(vec![]));
-        s.recompute_matches();
+    fn sum_expanded_footer_shrinks_list_viewport() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        let long = (0..90)
+            .map(|i| format!("word{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        s.summaries.insert(hash, SummaryState::Ready(long));
+        let collapsed = s.viewport_rows();
         update(&mut s, ch('S'));
-        assert_eq!(s.mode, Mode::List, "nothing selected → modal stays closed");
+        assert!(
+            s.viewport_rows() < collapsed,
+            "expanded footer leaves fewer list rows"
+        );
+    }
+
+    // `s` still generates while the footer is expanded (generation isn't gated on collapse).
+    #[test]
+    fn sum_generate_works_while_expanded() {
+        let mut s = app();
+        update(&mut s, ch('S')); // expand
+        let effects = update(&mut s, ch('s'));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::GenerateSummary { .. }]
+        ));
     }
 
     // SUM-04: `s` with no commits selected is a safe no-op.

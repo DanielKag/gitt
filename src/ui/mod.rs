@@ -11,16 +11,15 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
+use crate::domain::text::wrap_words;
 use crate::domain::{Commit, Ref, View};
-use crate::state::model::SUMMARY_ROWS;
 use crate::state::{AppState, Mode, PreviewState, SummaryState};
 
 pub use diff::draw_diff;
 pub use status::draw_status;
 
 use components::{
-    centered_rect, overlay_menu, preview_pane, split_code_spans, truncate, with_ellipsis,
-    wrap_words, wrapped_pane,
+    overlay_menu, preview_pane, split_code_spans, truncate, with_ellipsis, wrapped_pane,
 };
 
 const DATE_WIDTH: usize = 13;
@@ -47,9 +46,6 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
 
     if state.mode == Mode::Menu {
         render_menu(frame, chunks[2], state);
-    }
-    if state.mode == Mode::Summary {
-        render_summary_modal(frame, chunks[2], state);
     }
 }
 
@@ -80,10 +76,13 @@ fn render_search(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
-    // Reserve the bottom rows for the always-on AI summary panel; the rest is the list [+ preview].
+    // Reserve the bottom rows for the AI summary footer (taller when expanded); rest is list [+ preview].
     let rows = Layout::new(
         Direction::Vertical,
-        [Constraint::Min(1), Constraint::Length(SUMMARY_ROWS)],
+        [
+            Constraint::Min(1),
+            Constraint::Length(state.summary_panel_rows()),
+        ],
     )
     .split(area);
     let main = rows[0];
@@ -106,18 +105,18 @@ fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
     render_summary(frame, rows[1], state);
 }
 
-/// The always-visible AI-summary panel (teaser) for the selected commit. Prose renders markdown-style
-/// `code` spans (backticks stripped, styled distinctly). A summary too long for the panel is cut with
-/// a `…` and the title hints that `S` expands it into a modal; status/hint text is plain.
+/// The AI-summary footer for the selected commit. Prose renders markdown-style `code` spans
+/// (backticks stripped, styled distinctly). If the summary still overflows the footer it is cut with
+/// a `…`; the title reflects whether `S` will expand or minimize.
 fn render_summary(frame: &mut Frame, area: Rect, state: &AppState) {
     let width = area.width.saturating_sub(2) as usize; // inside the border
     let rows = area.height.saturating_sub(2) as usize; // visible content lines
 
-    let (content, title) = match state.selected_summary() {
+    let (content, overflow) = match state.selected_summary() {
         Some(SummaryState::Ready(text)) => teaser(text, "", width, rows),
         Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => (
             Text::from(Line::styled("summarizing with ollama…", theme::dim())),
-            "ai summary".to_string(),
+            false,
         ),
         Some(SummaryState::Generating(buf)) => teaser(buf, "▌", width, rows),
         Some(SummaryState::Failed(error)) => (
@@ -125,73 +124,38 @@ fn render_summary(frame: &mut Frame, area: Rect, state: &AppState) {
                 format!("summary failed: {error}"),
                 theme::dim(),
             )),
-            "ai summary".to_string(),
+            false,
         ),
         // Missing, or not looked up yet.
         _ => (
             Text::from(Line::styled("press s for an AI summary", theme::dim())),
-            "ai summary".to_string(),
+            false,
         ),
     };
-    wrapped_pane(frame, area, &title, content);
+
+    let title = if state.summary_expanded {
+        "ai summary · S: minimize"
+    } else if overflow {
+        "ai summary · S: expand"
+    } else {
+        "ai summary"
+    };
+    wrapped_pane(frame, area, title, content);
 }
 
-/// Build the teaser content for a summary: if it fits in `rows` lines, the full styled line; if not,
-/// the first `rows` wrapped lines (plain) with a trailing `…`. Returns `(content, panel_title)`.
-fn teaser(text: &str, suffix: &str, width: usize, rows: usize) -> (Text<'static>, String) {
+/// Build the footer content for a summary: if it fits in `rows` lines, the full styled line; if not,
+/// the first `rows` wrapped lines (plain) with a trailing `…`. Returns `(content, overflowed)`.
+fn teaser(text: &str, suffix: &str, width: usize, rows: usize) -> (Text<'static>, bool) {
     let plain = format!("{}{}", text.replace('`', ""), suffix);
     let lines = wrap_words(&plain, width);
     if rows == 0 || lines.len() <= rows {
-        (
-            Text::from(summary_line(text, suffix)),
-            "ai summary".to_string(),
-        )
+        (Text::from(summary_line(text, suffix)), false)
     } else {
         let mut shown: Vec<Line> = lines[..rows].iter().map(|l| Line::raw(l.clone())).collect();
         let last = with_ellipsis(&lines[rows - 1], width);
         shown[rows - 1] = Line::styled(last, theme::subject());
-        (Text::from(shown), "ai summary · S: expand".to_string())
+        (Text::from(shown), true)
     }
-}
-
-/// A centered, floating modal showing the full summary (styled), sized to hug the text: it wraps to
-/// a readable max width, then shrinks to the longest wrapped line and the line count. Reads live
-/// state, so a still-streaming summary keeps filling in while the modal is open.
-fn render_summary_modal(frame: &mut Frame, body: Rect, state: &AppState) {
-    let (content, plain) = match state.selected_summary() {
-        Some(SummaryState::Ready(text)) => (summary_line(text, ""), text.replace('`', "")),
-        Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => (
-            Line::styled("summarizing with ollama…", theme::dim()),
-            "summarizing with ollama…".to_string(),
-        ),
-        Some(SummaryState::Generating(buf)) => {
-            (summary_line(buf, "▌"), format!("{}▌", buf.replace('`', "")))
-        }
-        Some(SummaryState::Failed(error)) => {
-            let msg = format!("summary failed: {error}");
-            (Line::styled(msg.clone(), theme::dim()), msg)
-        }
-        _ => (
-            Line::styled("press s for an AI summary", theme::dim()),
-            "press s for an AI summary".to_string(),
-        ),
-    };
-
-    let title = "ai summary · Esc to close";
-    // Wrap to a readable max width, then shrink the box to the longest wrapped line (and the title).
-    let max_inner = (body.width.saturating_sub(6) as usize).min(72);
-    let lines = wrap_words(&plain, max_inner.max(1));
-    let inner_w = lines
-        .iter()
-        .map(|l| l.chars().count())
-        .max()
-        .unwrap_or(0)
-        .max(title.chars().count());
-    let w = (inner_w as u16 + 2).min(body.width);
-    let h = (lines.len() as u16 + 2).min(body.height);
-    let area = centered_rect(body, w, h);
-    frame.render_widget(ratatui::widgets::Clear, area);
-    wrapped_pane(frame, area, title, Text::from(content));
 }
 
 /// Build a summary line: normal prose in the subject style, `code` spans in the code style, with an
@@ -518,9 +482,9 @@ mod tests {
         insta::assert_snapshot!(out);
     }
 
-    // The expanded modal shows the full summary over the list.
+    // Expanding (S) grows the footer in place to show the full summary; the list stays above it.
     #[test]
-    fn sum_summary_modal_snapshot() {
+    fn sum_summary_expanded_snapshot() {
         let mut s = app();
         let hash = s.selected_hash().unwrap();
         s.summaries.insert(
@@ -532,8 +496,21 @@ mod tests {
                     .into(),
             ),
         );
-        s.mode = Mode::Summary;
-        insta::assert_snapshot!(render_to_string(&s, 80, 16));
+        s.summary_expanded = true;
+        let out = render_to_string(&s, 80, 20);
+        assert!(
+            !out.contains('…'),
+            "expanded footer shows the whole summary"
+        );
+        assert!(
+            out.contains("S: minimize"),
+            "title reflects it can be minimized"
+        );
+        assert!(
+            out.contains("commit SHA."),
+            "the tail of the summary is visible"
+        );
+        insta::assert_snapshot!(out);
     }
 
     #[test]

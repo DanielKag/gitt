@@ -5,6 +5,7 @@ pub mod diff;
 pub mod main_branch;
 pub mod status;
 pub mod summary;
+pub mod text;
 pub mod time;
 pub mod url;
 

@@ -2,13 +2,14 @@
 
 use std::collections::HashMap;
 
-use crate::domain::{Commit, View};
+use crate::domain::{Commit, View, text};
 use crate::fuzzy::{self, MatchEntry};
 
 /// Rows of "chrome" around the commit list: header (1) + search bar (1) + status (1).
 pub const CHROME_ROWS: u16 = 3;
 
-/// Rows reserved for the always-visible AI summary panel below the list: border (2) + 2 text lines.
+/// Rows reserved for the AI summary panel when collapsed: border (2) + 2 text lines. Also the floor
+/// when expanded, so short summaries look identical collapsed or expanded.
 pub const SUMMARY_ROWS: u16 = 4;
 
 /// Input focus / interaction mode.
@@ -20,8 +21,6 @@ pub enum Mode {
     Search,
     /// The action menu is open over the selected commit.
     Menu,
-    /// The expanded AI-summary modal is open over the selected commit.
-    Summary,
 }
 
 /// Load state of a single view's log.
@@ -137,6 +136,9 @@ pub struct AppState {
     pub menu: Option<ActionMenu>,
     /// AI summaries keyed by commit full SHA (shared across views).
     pub summaries: HashMap<String, SummaryState>,
+    /// When true, the summary footer grows to show the selected commit's full summary (toggled by
+    /// `S`); the list stays navigable above it.
+    pub summary_expanded: bool,
     /// Transient status-line message.
     pub status: Option<String>,
     pub current_branch: String,
@@ -161,6 +163,7 @@ impl AppState {
             preview: PreviewState::Idle,
             menu: None,
             summaries: HashMap::new(),
+            summary_expanded: false,
             status: None,
             current_branch,
             main_branch,
@@ -170,10 +173,45 @@ impl AppState {
         }
     }
 
-    /// Number of commit rows visible in the list given the current terminal height. The always-on
-    /// summary panel below the list reserves [`SUMMARY_ROWS`], so the list math must account for it.
+    /// Height (rows) of the summary footer, including its border. Collapsed it is [`SUMMARY_ROWS`];
+    /// expanded it grows to fit the selected commit's summary (word-wrapped to the current width),
+    /// floored at [`SUMMARY_ROWS`] and capped so the list keeps at least a few rows. Computed the
+    /// same way the UI lays it out, so list scroll math and rendering agree.
+    pub fn summary_panel_rows(&self) -> u16 {
+        if !self.summary_expanded {
+            return SUMMARY_ROWS;
+        }
+        let width = self.size.0.saturating_sub(2).max(1) as usize;
+        let content = text::wrap_words(&self.summary_display_text(), width)
+            .len()
+            .max(1) as u16;
+        let cap = self
+            .size
+            .1
+            .saturating_sub(CHROME_ROWS + 3)
+            .max(SUMMARY_ROWS);
+        (content + 2).clamp(SUMMARY_ROWS, cap)
+    }
+
+    /// The plain (backticks stripped) text shown for the selected commit's summary — used to size the
+    /// expanded footer. Empty when there's nothing substantial to show (so the footer stays at floor).
+    fn summary_display_text(&self) -> String {
+        match self.selected_summary() {
+            Some(SummaryState::Ready(t)) => t.replace('`', ""),
+            Some(SummaryState::Generating(b)) if !b.trim().is_empty() => b.replace('`', ""),
+            Some(SummaryState::Failed(e)) => format!("summary failed: {e}"),
+            _ => String::new(),
+        }
+    }
+
+    /// Number of commit rows visible in the list given the current terminal height, accounting for
+    /// the (possibly expanded) summary footer.
     pub fn viewport_rows(&self) -> usize {
-        (self.size.1.saturating_sub(CHROME_ROWS + SUMMARY_ROWS)).max(1) as usize
+        (self
+            .size
+            .1
+            .saturating_sub(CHROME_ROWS + self.summary_panel_rows()))
+        .max(1) as usize
     }
 
     /// The AI-summary state for the selected commit, if any is recorded.
