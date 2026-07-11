@@ -24,9 +24,10 @@ pub const MAX_DIFF_CHARS: usize = 4000;
 
 /// System instruction prepended to every summary prompt.
 const SYSTEM: &str = "You are a senior software engineer reviewing a git commit. In one or two plain \
-sentences, describe what the commit changes and why. Wrap file names, paths, code identifiers, \
-commands, tools, and version numbers in `backticks`. Reply with only the summary — no preamble, no \
-headings, no bullet points, no code fences.";
+sentences, describe what the commit changes and why. Start directly with a present-tense verb (e.g. \
+\"Adds\", \"Fixes\", \"Refactors\") — do NOT begin with \"This commit\", \"The commit\", or similar. \
+Wrap file names, paths, code identifiers, commands, tools, and version numbers in `backticks`. Reply \
+with only the summary — no preamble, no headings, no bullet points, no code fences.";
 
 /// Resolve the Ollama model name from the `GITT_OLLAMA_MODEL` value (if any), falling back to the
 /// default. Blank/whitespace values fall back too.
@@ -94,6 +95,36 @@ pub fn truncate_diff(diff: &str, max_lines: usize, max_chars: usize) -> String {
     out
 }
 
+/// Strip a redundant leading "This commit …" / "The commit …" preamble (case-insensitive) that
+/// models often add despite instructions, re-capitalizing the first surviving word. A safety net
+/// on top of the prompt; a no-op when the summary already starts with the action.
+pub fn strip_preamble(summary: &str) -> String {
+    const PREFIXES: [&str; 5] = [
+        "this commit ",
+        "the commit ",
+        "this change ",
+        "this pr ",
+        "this patch ",
+    ];
+    let s = summary.trim_start();
+    let lower = s.to_lowercase();
+    for p in PREFIXES {
+        if lower.starts_with(p) {
+            return capitalize_first(&s[p.len()..]);
+        }
+    }
+    s.to_string()
+}
+
+/// Uppercase the first character of `s` (leaving the rest untouched).
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 /// Build the full prompt for summarizing a commit: system instruction + subject + (bounded) diff.
 pub fn build_prompt(subject: &str, diff: &str) -> String {
     let truncated = truncate_diff(diff, MAX_DIFF_LINES, MAX_DIFF_CHARS);
@@ -132,6 +163,23 @@ mod tests {
             ollama_generate_url(Some("  ")),
             "http://127.0.0.1:11434/api/generate"
         );
+    }
+
+    // Redundant "This commit …" preamble is stripped and the next word re-capitalized; a summary
+    // that already starts with the action is untouched.
+    #[test]
+    fn strip_preamble_cases() {
+        assert_eq!(
+            strip_preamble("This commit adds a `foo` flag."),
+            "Adds a `foo` flag."
+        );
+        assert_eq!(strip_preamble("The commit fixes X."), "Fixes X.");
+        assert_eq!(strip_preamble("this change refactors Y"), "Refactors Y");
+        assert_eq!(
+            strip_preamble("Adds a thing already."),
+            "Adds a thing already."
+        );
+        assert_eq!(strip_preamble("  This commit tidies up."), "Tidies up.");
     }
 
     // SUM-05: the prompt carries the system instruction, the subject, and the diff.

@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::effect::Effect;
 use super::event::Event;
 use super::model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState, SummaryState};
+use crate::domain::summary::strip_preamble;
 use crate::domain::{View, url};
 
 /// Fold an event into the state, returning the side effects the shell must perform.
@@ -69,7 +70,7 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
             state
                 .summaries
                 .entry(hash)
-                .or_insert(SummaryState::Ready(text));
+                .or_insert(SummaryState::Ready(strip_preamble(&text)));
             vec![]
         }
         // Cache miss; same `or_insert` guard against a racing generation.
@@ -88,7 +89,9 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
         // A freshly generated summary is authoritative → overwrite (the panel shows it; the status
         // line is left alone so the keymap legend stays visible).
         Event::SummaryReady { hash, text } => {
-            state.summaries.insert(hash, SummaryState::Ready(text));
+            state
+                .summaries
+                .insert(hash, SummaryState::Ready(strip_preamble(&text)));
             vec![]
         }
         // Failures surface in the panel (per selected commit), not the status line.
@@ -120,6 +123,7 @@ fn on_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         Mode::List => on_key_list(state, key),
         Mode::Search => on_key_search(state, key),
         Mode::Menu => on_key_menu(state, key),
+        Mode::Summary => on_key_summary(state, key),
     }
 }
 
@@ -146,6 +150,7 @@ fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Tab => toggle_preview(state),
         KeyCode::Char('s') => summarize_selected(state),
+        KeyCode::Char('S') => open_summary_modal(state),
         KeyCode::Char('R') => {
             state.status = Some("fetching…".to_string());
             vec![Effect::Fetch]
@@ -193,6 +198,18 @@ fn on_key_menu(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Enter => execute_menu(state),
         _ => vec![],
     }
+}
+
+/// The expanded-summary modal is view-only: any of Esc/q/S/Enter dismisses it; everything else is
+/// ignored (the summary keeps streaming underneath via `SummaryChunk` events regardless).
+fn on_key_summary(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
+    if matches!(
+        key.code,
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('S') | KeyCode::Enter
+    ) {
+        state.mode = Mode::List;
+    }
+    vec![]
 }
 
 // --- helpers -------------------------------------------------------------------------------------
@@ -321,6 +338,14 @@ fn summarize_selected(state: &mut AppState) -> Vec<Effect> {
         .summaries
         .insert(hash.clone(), SummaryState::Generating(String::new()));
     vec![Effect::GenerateSummary { hash, subject }]
+}
+
+/// `S`: open the expanded-summary modal for the selected commit (no-op if nothing is selected).
+fn open_summary_modal(state: &mut AppState) -> Vec<Effect> {
+    if state.selected().is_some() {
+        state.mode = Mode::Summary;
+    }
+    vec![]
 }
 
 fn open_menu(state: &mut AppState) -> Vec<Effect> {
@@ -935,6 +960,30 @@ mod tests {
             s.summaries.get(&hash),
             Some(&SummaryState::Generating(String::new()))
         );
+    }
+
+    // `S` opens the expanded-summary modal; Esc (or S/q/Enter) closes it back to List.
+    #[test]
+    fn sum_modal_open_and_close() {
+        let mut s = app();
+        update(&mut s, ch('S'));
+        assert_eq!(s.mode, Mode::Summary);
+        update(&mut s, key(KeyCode::Esc));
+        assert_eq!(s.mode, Mode::List);
+
+        update(&mut s, ch('S'));
+        assert_eq!(s.mode, Mode::Summary);
+        update(&mut s, ch('S')); // toggles closed
+        assert_eq!(s.mode, Mode::List);
+    }
+
+    #[test]
+    fn sum_modal_no_selection_is_noop() {
+        let mut s = AppState::new("main".into(), "main".into(), None);
+        s.logs.insert(View::LocalHead, Load::Loaded(vec![]));
+        s.recompute_matches();
+        update(&mut s, ch('S'));
+        assert_eq!(s.mode, Mode::List, "nothing selected → modal stays closed");
     }
 
     // SUM-04: `s` with no commits selected is a safe no-op.

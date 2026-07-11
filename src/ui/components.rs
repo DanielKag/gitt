@@ -5,7 +5,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
+use ratatui::text::Text;
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Wrap};
 
 use super::theme;
@@ -57,14 +57,59 @@ pub fn preview_pane(frame: &mut Frame, area: Rect, title: &str, text: &str) {
     frame.render_widget(Paragraph::new(text.to_string()).block(block), area);
 }
 
-/// Render a bordered pane whose (already-styled) line wraps to the pane width. Used for the log
-/// screen's AI-summary panel (short prose that must wrap, unlike a diff which keeps its own lines).
-pub fn wrapped_pane(frame: &mut Frame, area: Rect, title: &str, line: Line<'static>) {
+/// Render a bordered pane whose (already-styled) text wraps to the pane width. Used for the log
+/// screen's AI-summary panel and its expanded modal.
+pub fn wrapped_pane(frame: &mut Frame, area: Rect, title: &str, content: Text<'static>) {
     let block = Block::bordered().title(title.to_string());
     frame.render_widget(
-        Paragraph::new(line).wrap(Wrap { trim: false }).block(block),
+        Paragraph::new(content)
+            .wrap(Wrap { trim: false })
+            .block(block),
         area,
     );
+}
+
+/// Greedy word-wrap `text` to `width` columns (breaking words longer than `width`), preserving
+/// explicit newlines. Pure, so the panel can measure overflow deterministically.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for raw in para.split_whitespace() {
+            let mut word = raw.to_string();
+            // Hard-break a word that can't fit on any line.
+            while word.chars().count() > width {
+                if !line.is_empty() {
+                    out.push(std::mem::take(&mut line));
+                }
+                out.push(word.chars().take(width).collect());
+                word = word.chars().skip(width).collect();
+            }
+            let wlen = word.chars().count();
+            if line.is_empty() {
+                line = word;
+            } else if line.chars().count() + 1 + wlen <= width {
+                line.push(' ');
+                line.push_str(&word);
+            } else {
+                out.push(std::mem::take(&mut line));
+                line = word;
+            }
+        }
+        out.push(line);
+    }
+    out
+}
+
+/// Cut `line` so it ends with a `…` marker within `width` columns (used when a teaser overflows).
+pub fn with_ellipsis(line: &str, width: usize) -> String {
+    let keep = width.saturating_sub(1);
+    let mut out: String = line.chars().take(keep).collect();
+    out.push('…');
+    out
 }
 
 /// Split text into `(segment, is_code)` runs on markdown-style backtick pairs, stripping the
@@ -98,7 +143,23 @@ pub fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::split_code_spans;
+    use super::{split_code_spans, with_ellipsis, wrap_words};
+
+    #[test]
+    fn wrap_words_greedy_and_hard_break() {
+        assert_eq!(wrap_words("a bb ccc", 5), vec!["a bb", "ccc"]);
+        // A word longer than the width is hard-broken.
+        assert_eq!(wrap_words("abcdefg hi", 4), vec!["abcd", "efg", "hi"]);
+        // Explicit newlines are preserved.
+        assert_eq!(wrap_words("one\ntwo", 10), vec!["one", "two"]);
+        assert_eq!(wrap_words("short", 80), vec!["short"]);
+    }
+
+    #[test]
+    fn with_ellipsis_fits_in_width() {
+        assert_eq!(with_ellipsis("hello world", 6), "hello…");
+        assert!(with_ellipsis("hello world", 6).chars().count() <= 6);
+    }
 
     #[test]
     fn no_backticks_is_one_plain_run() {

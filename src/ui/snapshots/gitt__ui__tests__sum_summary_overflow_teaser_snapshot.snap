@@ -1,0 +1,16 @@
+---
+source: src/ui/mod.rs
+expression: out
+---
+ feature (HEAD)    origin/main
+Search:   (3 matches)
+aaaaaaa 3 days ago    Ada Lovelace     add fuzzy search (HEAD, feature)
+bbbbbbb 5 days ago    Bo               fix flaky test
+ccccccc 2 weeks ago   Cy               refactor parser (v1.0)
+
+
+┌ai summary · S: expand────────────────────────────────────────────────────────┐
+│Adds an in-process fuzzy finder over the commit list, a diff preview pane     │
+│toggled with Tab, an action menu on Enter, and AI summaries generated locally…│
+└──────────────────────────────────────────────────────────────────────────────┘
+j/k · /search · Tab preview · s summary · ←/→ view · Enter · R fetch · q quit

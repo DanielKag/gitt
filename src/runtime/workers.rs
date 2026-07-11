@@ -4,7 +4,7 @@
 use std::sync::mpsc::Sender;
 use std::thread;
 
-use crate::domain::summary::build_prompt;
+use crate::domain::summary::{build_prompt, strip_preamble};
 use crate::ports::{ColorMode, GitError, GitRepo, Ports, Summarizer, SummaryCache};
 use crate::state::{Effect, Event};
 
@@ -209,7 +209,7 @@ fn generate_summary(
             error: "ollama returned an empty response".to_string(),
         },
         Ok(()) => {
-            let summary = acc.trim().to_string();
+            let summary = strip_preamble(acc.trim());
             // Cache write is best-effort: a failure here must not lose the summary for this run.
             let _ = cache.put(hash, &summary);
             Event::SummaryReady {

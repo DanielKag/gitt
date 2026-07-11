@@ -8,7 +8,7 @@ pub mod theme;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
 use crate::domain::{Commit, Ref, View};
@@ -18,7 +18,10 @@ use crate::state::{AppState, Mode, PreviewState, SummaryState};
 pub use diff::draw_diff;
 pub use status::draw_status;
 
-use components::{overlay_menu, preview_pane, split_code_spans, truncate, wrapped_pane};
+use components::{
+    centered_rect, overlay_menu, preview_pane, split_code_spans, truncate, with_ellipsis,
+    wrap_words, wrapped_pane,
+};
 
 const DATE_WIDTH: usize = 13;
 const AUTHOR_WIDTH: usize = 16;
@@ -44,6 +47,9 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
 
     if state.mode == Mode::Menu {
         render_menu(frame, chunks[2], state);
+    }
+    if state.mode == Mode::Summary {
+        render_summary_modal(frame, chunks[2], state);
     }
 }
 
@@ -100,23 +106,74 @@ fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
     render_summary(frame, rows[1], state);
 }
 
-/// The always-visible AI-summary panel for the selected commit. Summary prose renders markdown-style
-/// `code` spans (backticks stripped, styled distinctly); status/hint text is plain.
+/// The always-visible AI-summary panel (teaser) for the selected commit. Prose renders markdown-style
+/// `code` spans (backticks stripped, styled distinctly). A summary too long for the panel is cut with
+/// a `…` and the title hints that `S` expands it into a modal; status/hint text is plain.
 fn render_summary(frame: &mut Frame, area: Rect, state: &AppState) {
-    let line = match state.selected_summary() {
-        Some(SummaryState::Ready(text)) => summary_line(text, ""),
-        // While generating: show tokens as they stream; before the first one, a placeholder.
-        Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => {
-            Line::styled("summarizing with ollama…", theme::dim())
-        }
-        Some(SummaryState::Generating(buf)) => summary_line(buf, "▌"),
-        Some(SummaryState::Failed(error)) => {
-            Line::styled(format!("summary failed: {error}"), theme::dim())
-        }
+    let width = area.width.saturating_sub(2) as usize; // inside the border
+    let rows = area.height.saturating_sub(2) as usize; // visible content lines
+
+    let (content, title) = match state.selected_summary() {
+        Some(SummaryState::Ready(text)) => teaser(text, "", width, rows),
+        Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => (
+            Text::from(Line::styled("summarizing with ollama…", theme::dim())),
+            "ai summary".to_string(),
+        ),
+        Some(SummaryState::Generating(buf)) => teaser(buf, "▌", width, rows),
+        Some(SummaryState::Failed(error)) => (
+            Text::from(Line::styled(
+                format!("summary failed: {error}"),
+                theme::dim(),
+            )),
+            "ai summary".to_string(),
+        ),
         // Missing, or not looked up yet.
-        _ => Line::styled("press s for an AI summary", theme::dim()),
+        _ => (
+            Text::from(Line::styled("press s for an AI summary", theme::dim())),
+            "ai summary".to_string(),
+        ),
     };
-    wrapped_pane(frame, area, "ai summary", line);
+    wrapped_pane(frame, area, &title, content);
+}
+
+/// Build the teaser content for a summary: if it fits in `rows` lines, the full styled line; if not,
+/// the first `rows` wrapped lines (plain) with a trailing `…`. Returns `(content, panel_title)`.
+fn teaser(text: &str, suffix: &str, width: usize, rows: usize) -> (Text<'static>, String) {
+    let plain = format!("{}{}", text.replace('`', ""), suffix);
+    let lines = wrap_words(&plain, width);
+    if rows == 0 || lines.len() <= rows {
+        (
+            Text::from(summary_line(text, suffix)),
+            "ai summary".to_string(),
+        )
+    } else {
+        let mut shown: Vec<Line> = lines[..rows].iter().map(|l| Line::raw(l.clone())).collect();
+        let last = with_ellipsis(&lines[rows - 1], width);
+        shown[rows - 1] = Line::styled(last, theme::subject());
+        (Text::from(shown), "ai summary · S: expand".to_string())
+    }
+}
+
+/// A centered, floating modal showing the full summary (styled), sized to most of the body. It reads
+/// live state, so a still-streaming summary keeps filling in while the modal is open.
+fn render_summary_modal(frame: &mut Frame, body: Rect, state: &AppState) {
+    let content = match state.selected_summary() {
+        Some(SummaryState::Ready(text)) => Text::from(summary_line(text, "")),
+        Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => {
+            Text::from(Line::styled("summarizing with ollama…", theme::dim()))
+        }
+        Some(SummaryState::Generating(buf)) => Text::from(summary_line(buf, "▌")),
+        Some(SummaryState::Failed(error)) => Text::from(Line::styled(
+            format!("summary failed: {error}"),
+            theme::dim(),
+        )),
+        _ => Text::from(Line::styled("press s for an AI summary", theme::dim())),
+    };
+    let w = body.width.saturating_sub(6).min(100);
+    let h = body.height.saturating_sub(2);
+    let area = centered_rect(body, w, h);
+    frame.render_widget(ratatui::widgets::Clear, area);
+    wrapped_pane(frame, area, "ai summary · Esc to close", content);
 }
 
 /// Build a summary line: normal prose in the subject style, `code` spans in the code style, with an
@@ -421,6 +478,44 @@ mod tests {
         );
         assert!(out.contains("sled-playwright") && out.contains("package.json"));
         insta::assert_snapshot!(out);
+    }
+
+    // A long summary is cut in the panel with a `…` and the title hints `S: expand`.
+    #[test]
+    fn sum_summary_overflow_teaser_snapshot() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries.insert(
+            hash,
+            SummaryState::Ready(
+                "Adds an in-process fuzzy finder over the commit list, a diff preview pane toggled \
+                 with Tab, an action menu on Enter, and AI summaries generated locally via Ollama \
+                 and cached on disk keyed by commit SHA."
+                    .into(),
+            ),
+        );
+        let out = render_to_string(&s, 80, 12);
+        assert!(out.contains('…'), "overflowing teaser shows an ellipsis");
+        assert!(out.contains("S: expand"), "title hints how to expand");
+        insta::assert_snapshot!(out);
+    }
+
+    // The expanded modal shows the full summary over the list.
+    #[test]
+    fn sum_summary_modal_snapshot() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries.insert(
+            hash,
+            SummaryState::Ready(
+                "Adds an in-process fuzzy finder over the commit list, a diff preview pane toggled \
+                 with Tab, an action menu on Enter, and AI summaries generated locally via Ollama \
+                 and cached on disk keyed by commit SHA."
+                    .into(),
+            ),
+        );
+        s.mode = Mode::Summary;
+        insta::assert_snapshot!(render_to_string(&s, 80, 16));
     }
 
     #[test]

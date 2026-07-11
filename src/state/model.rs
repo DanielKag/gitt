@@ -20,6 +20,8 @@ pub enum Mode {
     Search,
     /// The action menu is open over the selected commit.
     Menu,
+    /// The expanded AI-summary modal is open over the selected commit.
+    Summary,
 }
 
 /// Load state of a single view's log.

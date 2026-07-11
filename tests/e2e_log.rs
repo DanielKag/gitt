@@ -143,8 +143,8 @@ fn sum_01_03_summary_panel_shows_hint() {
     tui.wait_exit();
 }
 
-// SUM-04/05/06: pressing `s` generates a summary (via the fake summarizer), the panel shows it, and
-// the prompt actually sent to the model carried the commit subject and its diff.
+// SUM-04/05/06: pressing `s` generates a summary (via the fake summarizer), the panel shows it (with
+// the redundant "This commit" preamble stripped), and the prompt carried the subject and diff.
 #[test]
 fn sum_04_06_generate_shows_summary_and_builds_prompt() {
     let repo = TempRepo::with_graph();
@@ -157,8 +157,8 @@ fn sum_04_06_generate_shows_summary_and_builds_prompt() {
     tui.wait_for("press s for an AI summary");
 
     tui.send_str("s");
-    // The (fake) summarizer streams its text into the panel.
-    tui.wait_for("This commit adds a local-only change.");
+    // The panel shows the summary with the "This commit " preamble stripped and re-capitalized.
+    tui.wait_for("Adds a local-only change.");
 
     // The context fed to the model: the subject and the commit's diff (touches file.txt).
     let prompt = tui.sink("summary_prompt.txt");
