@@ -63,16 +63,18 @@ impl RealGit {
 }
 
 impl GitRepo for RealGit {
-    fn log(&self, view: View, limit: usize) -> Result<Vec<Commit>, GitError> {
+    fn log_page(&self, view: View, skip: usize, limit: usize) -> Result<Vec<Commit>, GitError> {
         let target = match view {
             View::LocalHead => "HEAD".to_string(),
             View::OriginMain => format!("origin/{}", self.main_branch),
         };
+        let skip_arg = format!("--skip={skip}");
         let limit_arg = format!("-n{limit}");
         let format_arg = format!("--pretty=format:{PRETTY_FORMAT}");
         let raw = self.run(&[
             "log",
             &target,
+            &skip_arg,
             &limit_arg,
             "--no-color",
             "--decorate=short",

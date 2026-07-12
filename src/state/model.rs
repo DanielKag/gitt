@@ -8,6 +8,11 @@ use crate::fuzzy::{self, MatchEntry};
 /// Rows of "chrome" around the commit list: header (1) + search bar (1) + status (1).
 pub const CHROME_ROWS: u16 = 3;
 
+/// How many commits each background page fetches. The first page paints instantly; the rest stream
+/// in behind it (see LOG-21..24). Chosen so first paint stays instant even on a large history while
+/// keeping the number of `git log` pages small for a 20k–200k-commit repo.
+pub const LOG_PAGE: usize = 5000;
+
 /// Rows reserved for the AI summary panel when collapsed: border (2) + 2 text lines. Also the floor
 /// when expanded, so short summaries look identical collapsed or expanded.
 pub const SUMMARY_ROWS: u16 = 4;
@@ -29,9 +34,11 @@ pub enum Load {
     /// Not requested yet.
     #[default]
     Idle,
-    /// Load in flight.
+    /// First page in flight; no commits yet.
     Loading,
-    /// Loaded commits (newest first).
+    /// Some commits are loaded (newest first) but more pages are still streaming in.
+    Streaming(Vec<Commit>),
+    /// All commits loaded (newest first); the history is complete (or the cap was hit).
     Loaded(Vec<Commit>),
     /// Load failed with a message.
     Failed(String),
@@ -123,6 +130,13 @@ pub enum SummaryState {
 pub struct AppState {
     pub view: View,
     pub logs: HashMap<View, Load>,
+    /// Current load generation per view. Bumped each time a view's load (re)starts so batches from a
+    /// superseded load (e.g. the user pressed `R` mid-stream) are recognised as stale and dropped.
+    pub log_epoch: HashMap<View, u64>,
+    /// Commits per background page. Defaults to [`LOG_PAGE`]; overridable (tests, `GITT_LOG_PAGE`).
+    pub log_page: usize,
+    /// Hard cap on total commits loaded per view (`0` = unlimited). From `--max-count`.
+    pub max_count: usize,
     pub filter: String,
     /// Ranked matches for the active view + filter.
     pub matches: Vec<MatchEntry>,
@@ -154,6 +168,9 @@ impl AppState {
         AppState {
             view: View::LocalHead,
             logs: HashMap::new(),
+            log_epoch: HashMap::new(),
+            log_page: LOG_PAGE,
+            max_count: 0,
             filter: String::new(),
             matches: Vec::new(),
             cursor: 0,
@@ -219,11 +236,21 @@ impl AppState {
         self.summaries.get(&self.selected()?.hash)
     }
 
-    /// Loaded commits for the active view (empty slice if not loaded).
+    /// Loaded commits for the active view (empty slice if not loaded). Includes commits loaded so far
+    /// while a background load is still streaming.
     pub fn commits(&self) -> &[Commit] {
         match self.logs.get(&self.view) {
-            Some(Load::Loaded(commits)) => commits,
+            Some(Load::Loaded(commits)) | Some(Load::Streaming(commits)) => commits,
             _ => &[],
+        }
+    }
+
+    /// While the active view is still streaming pages in the background, the count of commits loaded
+    /// so far (for the status-line progress indicator); `None` once the load is complete or idle.
+    pub fn log_loading_count(&self) -> Option<usize> {
+        match self.logs.get(&self.view) {
+            Some(Load::Streaming(commits)) => Some(commits.len()),
+            _ => None,
         }
     }
 
@@ -241,7 +268,9 @@ impl AppState {
     /// Recompute matches for the active view + filter, then re-clamp cursor and scroll.
     pub fn recompute_matches(&mut self) {
         self.matches = match self.logs.get(&self.view) {
-            Some(Load::Loaded(commits)) => fuzzy::filter(commits, &self.filter),
+            Some(Load::Loaded(commits)) | Some(Load::Streaming(commits)) => {
+                fuzzy::filter(commits, &self.filter)
+            }
             _ => Vec::new(),
         };
         self.clamp_cursor();

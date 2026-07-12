@@ -10,10 +10,22 @@ pub enum Event {
     Key(KeyEvent),
     /// Terminal resized to (cols, rows).
     Resize(u16, u16),
-    /// A view's log finished loading.
-    LogLoaded { view: View, commits: Vec<Commit> },
-    /// A view's log failed to load.
-    LogFailed { view: View, error: String },
+    /// One page of a view's log finished loading (`skip` is the offset it was fetched at; `epoch` the
+    /// load generation). The reducer appends it and requests the next page until the history is
+    /// exhausted or the cap is hit.
+    LogBatch {
+        view: View,
+        skip: usize,
+        epoch: u64,
+        commits: Vec<Commit>,
+    },
+    /// A view's log page failed to load. If earlier pages already landed they are kept; otherwise the
+    /// view enters the failed state.
+    LogPageFailed {
+        view: View,
+        epoch: u64,
+        error: String,
+    },
     /// A commit's diff finished loading.
     DiffLoaded { hash: String, text: String },
     /// A commit's diff failed to load.

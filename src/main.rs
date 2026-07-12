@@ -24,8 +24,9 @@ struct Cli {
 enum Command {
     /// Browse the git log interactively with fuzzy search.
     Log {
-        /// Maximum number of commits to load per view.
-        #[arg(long, default_value_t = 5000)]
+        /// Cap the total commits loaded per view (0 = unlimited). The log loads progressively — the
+        /// first page paints instantly and the rest stream in — so the default is unlimited.
+        #[arg(long, default_value_t = 0)]
         max_count: usize,
     },
     /// Stage, unstage, diff, and discard working-tree changes interactively.
@@ -56,7 +57,16 @@ fn run_log(max_count: usize) -> Result<()> {
     let current_branch = git_cli::current_branch(&dir);
     let remote_url = git_cli::remote_url(&dir);
 
-    let state = AppState::new(current_branch, main_branch.clone(), remote_url);
+    let mut state = AppState::new(current_branch, main_branch.clone(), remote_url);
+    state.max_count = max_count;
+    // Test seam: shrink the page size so e2e can exercise multi-page streaming on a tiny repo.
+    if let Some(page) = std::env::var("GITT_LOG_PAGE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        && page > 0
+    {
+        state.log_page = page;
+    }
 
     let ports = Ports {
         git: Arc::new(RealGit::new(dir, main_branch, now)),
@@ -65,7 +75,6 @@ fn run_log(max_count: usize) -> Result<()> {
         pr: Arc::new(RealPr),
         summarizer: Arc::new(RealSummarizer),
         summary_cache: Arc::new(RealSummaryCache),
-        log_limit: max_count,
     };
 
     runtime::run(state, ports)
@@ -90,7 +99,6 @@ fn run_status() -> Result<()> {
         pr: Arc::new(RealPr),
         summarizer: Arc::new(RealSummarizer),
         summary_cache: Arc::new(RealSummaryCache),
-        log_limit: 0,
     };
 
     runtime::run(state, ports)
@@ -115,7 +123,6 @@ fn run_diff() -> Result<()> {
         pr: Arc::new(RealPr),
         summarizer: Arc::new(RealSummarizer),
         summary_cache: Arc::new(RealSummaryCache),
-        log_limit: 0,
     };
 
     runtime::run(state, ports)

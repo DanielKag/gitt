@@ -182,6 +182,10 @@ fn render_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let commits = state.commits();
 
     if state.matches.is_empty() {
+        let streaming = matches!(
+            state.logs.get(&state.view),
+            Some(crate::state::Load::Streaming(_))
+        );
         let msg = if matches!(
             state.logs.get(&state.view),
             Some(crate::state::Load::Loading) | None
@@ -189,6 +193,9 @@ fn render_list(frame: &mut Frame, area: Rect, state: &AppState) {
             "Loading commits…".to_string()
         } else if state.filter.is_empty() {
             "No commits".to_string()
+        } else if streaming {
+            // The match may still be in a page that hasn't streamed in yet — don't claim it's absent.
+            format!("No matches for “{}” yet — still loading…", state.filter)
         } else {
             format!("No matches for “{}”", state.filter)
         };
@@ -201,47 +208,74 @@ fn render_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let items: Vec<ListItem> = state.matches[state.top..end]
         .iter()
         .enumerate()
-        .map(|(offset, m)| {
+        // `.get` (not index) so a match entry that briefly outlives its commit slice — e.g. between a
+        // reload swapping to `Loading` and the first batch landing — can never panic the whole TUI.
+        .filter_map(|(offset, m)| {
             let idx = state.top + offset;
-            let commit = &commits[m.commit_idx];
-            let mut item = ListItem::new(commit_line(commit));
+            let commit = commits.get(m.commit_idx)?;
+            let mut item = ListItem::new(commit_line(commit, &state.filter));
             if idx == state.cursor {
                 item = item.style(theme::selected());
             }
-            item
+            Some(item)
         })
         .collect();
 
     frame.render_widget(List::new(items), area);
 }
 
-/// Build one commit's display line: `hash  date  author  subject (refs)`.
-fn commit_line(c: &Commit) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(format!("{:<8}", c.short), theme::hash()),
-        Span::styled(
-            format!("{:<w$}", truncate(&c.relative, DATE_WIDTH), w = DATE_WIDTH),
-            theme::date(),
-        ),
-        Span::raw(" "),
-        Span::styled(
-            format!(
-                "{:<w$}",
-                truncate(&c.author, AUTHOR_WIDTH),
-                w = AUTHOR_WIDTH
-            ),
-            theme::author(),
-        ),
-        Span::raw(" "),
-        Span::styled(c.subject.clone(), theme::subject()),
-    ];
+/// Build one commit's display line: `hash  date  author  subject (refs)`. When a search `query` is
+/// active, the substrings it matched are highlighted in the searchable fields (LOG-25); the date is
+/// not searchable, so it's never highlighted.
+fn commit_line(c: &Commit, query: &str) -> Line<'static> {
+    let author = format!(
+        "{:<w$}",
+        truncate(&c.author, AUTHOR_WIDTH),
+        w = AUTHOR_WIDTH
+    );
+
+    let mut spans = highlight(&format!("{:<8}", c.short), query, theme::hash());
+    spans.push(Span::styled(
+        format!("{:<w$}", truncate(&c.relative, DATE_WIDTH), w = DATE_WIDTH),
+        theme::date(),
+    ));
+    spans.push(Span::raw(" "));
+    spans.extend(highlight(&author, query, theme::author()));
+    spans.push(Span::raw(" "));
+    spans.extend(highlight(&c.subject, query, theme::subject()));
     if !c.refs.is_empty() {
-        spans.push(Span::styled(
-            format!(" ({})", refs_label(&c.refs)),
+        spans.extend(highlight(
+            &format!(" ({})", refs_label(&c.refs)),
+            query,
             theme::refs(),
         ));
     }
     Line::from(spans)
+}
+
+/// Split `text` into spans, styling the query's matched substrings with the search-match highlight
+/// (LOG-25) and everything else with `base`. With no query (or no match) the whole field is one
+/// `base` span, so an unfiltered list renders exactly as before.
+fn highlight(text: &str, query: &str, base: ratatui::style::Style) -> Vec<Span<'static>> {
+    let ranges = crate::fuzzy::match_ranges(text, query);
+    if ranges.is_empty() {
+        return vec![Span::styled(text.to_string(), base)];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let hl = base.patch(theme::search_match());
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    for (s, e) in ranges {
+        if pos < s {
+            spans.push(Span::styled(chars[pos..s].iter().collect::<String>(), base));
+        }
+        spans.push(Span::styled(chars[s..e].iter().collect::<String>(), hl));
+        pos = e;
+    }
+    if pos < chars.len() {
+        spans.push(Span::styled(chars[pos..].iter().collect::<String>(), base));
+    }
+    spans
 }
 
 fn refs_label(refs: &[Ref]) -> String {
@@ -262,9 +296,15 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
-    let text = state.status.clone().unwrap_or_else(|| {
+    // A transient action message wins; otherwise, while the history is still streaming in, show the
+    // load progress (it clears itself once the load completes); otherwise the key hints.
+    let text = if let Some(status) = &state.status {
+        status.clone()
+    } else if let Some(n) = state.log_loading_count() {
+        format!("⟳ loading commits… {n} so far")
+    } else {
         "j/k · /search · Tab preview · s summary · ←/→ view · Enter · R fetch · q quit".to_string()
-    });
+    };
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
 
@@ -353,6 +393,68 @@ mod tests {
     fn log_01_list_snapshot() {
         let s = app();
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // LOG-22: while streaming, the status line shows the load progress; once loaded it doesn't.
+    #[test]
+    fn log_22_status_line_shows_loading_progress() {
+        let mut s = app();
+        // Re-cast the current view as still streaming.
+        let commits = match s.logs.remove(&View::LocalHead) {
+            Some(Load::Loaded(c)) => c,
+            _ => unreachable!(),
+        };
+        s.logs.insert(View::LocalHead, Load::Streaming(commits));
+        s.recompute_matches();
+        let streaming = render_to_string(&s, 80, 12);
+        assert!(
+            streaming.contains("loading"),
+            "streaming status line should show progress:\n{streaming}"
+        );
+
+        // Once loaded, the indicator is gone.
+        let commits = match s.logs.remove(&View::LocalHead) {
+            Some(Load::Streaming(c)) => c,
+            _ => unreachable!(),
+        };
+        s.logs.insert(View::LocalHead, Load::Loaded(commits));
+        let loaded = render_to_string(&s, 80, 12);
+        assert!(
+            !loaded.contains("loading"),
+            "loaded status line should not show progress"
+        );
+    }
+
+    // LOG-21: while streaming, a filter that hasn't matched yet must not claim "No matches" (the
+    // commit may still be in an unloaded page); once loaded, the definitive message is fine.
+    #[test]
+    fn log_21_streaming_no_match_says_still_loading() {
+        let mut s = app();
+        let commits = match s.logs.remove(&View::LocalHead) {
+            Some(Load::Loaded(c)) => c,
+            _ => unreachable!(),
+        };
+        s.logs.insert(View::LocalHead, Load::Streaming(commits));
+        s.filter = "zzzznope".into();
+        s.recompute_matches();
+        let streaming = render_to_string(&s, 80, 12);
+        assert!(
+            streaming.contains("still loading"),
+            "streaming no-match should be tentative:\n{streaming}"
+        );
+
+        // Same filter, but the load is complete → the message is definitive.
+        let commits = match s.logs.remove(&View::LocalHead) {
+            Some(Load::Streaming(c)) => c,
+            _ => unreachable!(),
+        };
+        s.logs.insert(View::LocalHead, Load::Loaded(commits));
+        let loaded = render_to_string(&s, 80, 12);
+        assert!(
+            !loaded.contains("still loading"),
+            "loaded no-match should be definitive"
+        );
+        assert!(loaded.contains("No matches"));
     }
 
     // LOG-04/05: search bar shows filter + narrowed list.
@@ -557,6 +659,46 @@ mod tests {
     fn narrow_width_snapshot() {
         let s = app();
         insta::assert_snapshot!(render_to_string(&s, 40, 10));
+    }
+
+    // LOG-25: matched substrings in the list are highlighted with the search-match style; the
+    // surrounding characters keep their normal (non-highlight) style.
+    #[test]
+    fn log_25_matches_are_highlighted() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut s = app();
+        s.mode = Mode::Search;
+        s.filter = "parser".into();
+        s.recompute_matches();
+
+        let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        term.draw(|f| draw(f, &s)).unwrap();
+        let buf = term.backend().buffer();
+
+        // Find the "refactor parser" row and the column where "parser" starts.
+        let screen = render_to_string(&s, 80, 12);
+        let (y, line) = screen
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains("refactor parser"))
+            .map(|(y, l)| (y as u16, l.to_string()))
+            .expect("the matching commit is shown");
+        let x = line.find("parser").expect("subject text is present") as u16;
+
+        let hl = theme::search_match();
+        // Every char of the matched "parser" carries the highlight bg/modifier.
+        for dx in 0.."parser".len() as u16 {
+            let cell = &buf[(x + dx, y)];
+            assert_eq!(cell.bg, hl.bg.unwrap(), "matched char has highlight bg");
+        }
+        // The character just before the match (a space) does not.
+        assert_ne!(
+            buf[(x - 1, y)].bg,
+            hl.bg.unwrap(),
+            "non-matched char keeps its normal background"
+        );
     }
 
     // A few style assertions (color-locking) rather than only text.

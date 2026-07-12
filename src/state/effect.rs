@@ -5,8 +5,15 @@ use crate::domain::{DiffKind, DiffScope, View};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    /// Load (or reload) the log for a view.
-    LoadLog(View),
+    /// Load one page of a view's log (`skip`..`skip+limit`, newest first). `epoch` tags the load
+    /// generation so the reducer can drop batches from a superseded load. The reducer emits the next
+    /// page's effect as each batch arrives, so the history streams in behind the first paint.
+    LoadLogPage {
+        view: View,
+        skip: usize,
+        limit: usize,
+        epoch: u64,
+    },
     /// Load the diff (`git show`) for a commit hash, for the preview pane.
     LoadDiff(String),
     /// `git fetch`, then reload the current view.

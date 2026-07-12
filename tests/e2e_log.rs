@@ -22,6 +22,29 @@ fn log_01_18_renders_log_and_quits() {
     tui.wait_exit();
 }
 
+// LOG-21: the log loads progressively in small pages (GITT_LOG_PAGE=2 here), yet search still
+// reaches the OLDEST commit — which only lands after several background pages stream in behind the
+// instant first paint.
+#[test]
+fn log_21_progressive_load_search_reaches_full_history() {
+    let repo = TempRepo::with_graph();
+    let mut tui = Tui::spawn_cmd_env(repo.path(), "log", &[("GITT_LOG_PAGE", "2")]);
+
+    // First page paints immediately: the newest commit is visible.
+    tui.wait_for("local only change");
+
+    // "init project" is the oldest commit — reachable only if later pages loaded.
+    tui.send_str("/");
+    tui.send_str("init");
+    tui.wait_for("init project");
+    // The first-page commit is filtered out, confirming this is a real search hit.
+    tui.wait_until_gone("local only change");
+
+    tui.enter();
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
 // LOG-04 / LOG-05: '/' enters search and typing narrows the visible commits.
 #[test]
 fn log_04_05_search_narrows_list() {
@@ -231,6 +254,58 @@ fn sum_08_generation_failure_shows_on_panel() {
     tui.send_str("s");
     tui.wait_for("summary failed");
 
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
+// LOG-05: search is exact substring-per-term, NOT a fuzzy subsequence. A subsequence of a commit's
+// text that isn't a contiguous substring must not match; two real substrings are AND-ed together.
+#[test]
+fn log_05_exact_substring_search() {
+    let repo = TempRepo::with_graph();
+    let mut tui = Tui::spawn(repo.path());
+    tui.wait_for("refactor parser");
+
+    tui.send_str("/");
+    // "factorpar" is a subsequence of "refactor parser" (f-a-c-t-o-r-p-a-r) but not a substring —
+    // exact search rejects it (fuzzy would have matched).
+    tui.send_str("factorpar");
+    tui.wait_until_gone("refactor parser");
+
+    // Backspace it away, then type the two terms with a space: both are real substrings, so
+    // "refactor parser" matches while "add parser" (no "factor") is excluded by the AND.
+    for _ in 0.."factorpar".len() {
+        tui.send(&[0x7f]); // Backspace
+    }
+    tui.send_str("factor par");
+    tui.wait_for("refactor parser");
+    tui.wait_until_gone("add parser");
+
+    tui.enter();
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
+// LOG-26: Tab toggles the diff preview from inside search mode, without leaving the search.
+#[test]
+fn log_26_tab_previews_in_search_mode() {
+    let repo = TempRepo::with_graph();
+    let mut tui = Tui::spawn(repo.path());
+    tui.wait_for("local only change");
+
+    tui.send_str("/"); // enter search mode
+    tui.send_str("local"); // narrow to the top commit
+    tui.wait_for("local only change");
+
+    tui.tab(); // toggle the preview while still typing a search
+    tui.wait_for("diff"); // preview pane title
+    tui.wait_for("file.txt"); // git show output for the selected commit
+
+    // Still in search mode: further keystrokes keep editing the filter (0 matches now).
+    tui.send_str("zzz");
+    tui.wait_for("(0 matches)");
+
+    tui.enter();
     tui.send_str("q");
     tui.wait_exit();
 }

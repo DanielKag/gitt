@@ -6,7 +6,8 @@ use super::effect::Effect;
 use super::event::Event;
 use super::model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState, SummaryState};
 use crate::domain::summary::strip_preamble;
-use crate::domain::{View, url};
+use crate::domain::{Commit, View, url};
+use crate::fuzzy::MatchEntry;
 
 /// Fold an event into the state, returning the side effects the shell must perform.
 pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
@@ -17,22 +18,14 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
             state.clamp_scroll();
             vec![]
         }
-        Event::LogLoaded { view, commits } => {
-            state.logs.insert(view, Load::Loaded(commits));
-            if view == state.view {
-                state.recompute_matches();
-                return on_selection_changed(state);
-            }
-            vec![]
-        }
-        Event::LogFailed { view, error } => {
-            let failed_current = view == state.view;
-            state.logs.insert(view, Load::Failed(error.clone()));
-            if failed_current {
-                state.matches.clear();
-                state.status = Some(format!("log failed: {error}"));
-            }
-            vec![]
+        Event::LogBatch {
+            view,
+            skip,
+            epoch,
+            commits,
+        } => on_log_batch(state, view, skip, epoch, commits),
+        Event::LogPageFailed { view, epoch, error } => {
+            on_log_page_failed(state, view, epoch, error)
         }
         Event::DiffLoaded { hash, text } => {
             if state.preview_open && state.selected_hash().as_deref() == Some(hash.as_str()) {
@@ -49,8 +42,7 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
         Event::FetchFinished(result) => match result {
             Ok(()) => {
                 state.status = Some("fetched".to_string());
-                state.logs.insert(state.view, Load::Loading);
-                vec![Effect::LoadLog(state.view)]
+                vec![start_log_load(state, state.view)]
             }
             Err(e) => {
                 state.status = Some(format!("fetch failed: {e}"));
@@ -171,6 +163,8 @@ fn on_key_search(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Down => move_by(state, 1),
         KeyCode::Up => move_by(state, -1),
+        // LOG-26: peek at the diff without leaving the search you're typing.
+        KeyCode::Tab => toggle_preview(state),
         KeyCode::Backspace => {
             state.filter.pop();
             after_filter_change(state)
@@ -234,6 +228,165 @@ fn set_cursor(state: &mut AppState, idx: usize) -> Vec<Effect> {
     }
 }
 
+/// (Re)start a view's progressive load: bump its epoch (so any in-flight older load's batches become
+/// stale and are ignored), mark it `Loading`, and return the effect that fetches the first page.
+pub(crate) fn start_log_load(state: &mut AppState, view: View) -> Effect {
+    let epoch = state.log_epoch.entry(view).or_insert(0);
+    *epoch += 1;
+    let epoch = *epoch;
+    state.logs.insert(view, Load::Loading);
+    if view == state.view {
+        // Reloading in place (e.g. after `R`) drops the current view's commits back to `Loading`.
+        // Recompute so `matches` can't keep indexing into the now-empty commit slice — otherwise the
+        // redraw before the first batch arrives would index out of bounds and panic the TUI.
+        state.recompute_matches();
+    }
+    Effect::LoadLogPage {
+        view,
+        skip: 0,
+        limit: page_limit(state, 0),
+        epoch,
+    }
+}
+
+/// The page size to request when `loaded` commits are already in for this view, honouring the cap:
+/// unlimited (`max_count == 0`) always asks for a full page; otherwise never asks for more than the
+/// cap leaves, so a small `--max-count` doesn't pull (and parse) a full 5000-commit page to throw away.
+fn page_limit(state: &AppState, loaded: usize) -> usize {
+    match state.max_count {
+        0 => state.log_page,
+        cap => state.log_page.min(cap.saturating_sub(loaded)),
+    }
+}
+
+/// Fold one loaded page into a view. Appends to what's already there (or replaces on the first page),
+/// finalises to `Loaded` when the history is exhausted or the cap is hit, and otherwise requests the
+/// next page. Stale batches (from a superseded load) are dropped. Appending never disturbs the
+/// selected commit.
+fn on_log_batch(
+    state: &mut AppState,
+    view: View,
+    skip: usize,
+    epoch: u64,
+    commits: Vec<Commit>,
+) -> Vec<Effect> {
+    // Drop batches from a load that's already been superseded (e.g. a reload started meanwhile).
+    if state.log_epoch.get(&view).copied().unwrap_or(0) != epoch {
+        return vec![];
+    }
+
+    let is_current = view == state.view;
+    // Remember the selection so appended (older) commits can't shift it out from under the cursor.
+    let before = if is_current {
+        state.selected_hash()
+    } else {
+        None
+    };
+
+    let batch_len = commits.len();
+    // The first page (skip == 0) replaces any prior contents; later pages append.
+    let mut all = if skip == 0 {
+        Vec::new()
+    } else {
+        match state.logs.remove(&view) {
+            Some(Load::Streaming(v)) | Some(Load::Loaded(v)) => v,
+            _ => Vec::new(),
+        }
+    };
+    let loaded_before = all.len();
+    all.extend(commits);
+
+    // A short page (fewer than we asked for) means git ran out of history; hitting the cap also ends
+    // the load. Comparing against what we actually requested (not the raw page size) keeps this right
+    // when the cap shrinks the final request.
+    let mut done = batch_len < page_limit(state, loaded_before);
+    if state.max_count != 0 && all.len() >= state.max_count {
+        all.truncate(state.max_count);
+        done = true;
+    }
+    let total = all.len();
+    state.logs.insert(
+        view,
+        if done {
+            Load::Loaded(all)
+        } else {
+            Load::Streaming(all)
+        },
+    );
+
+    let mut effects = Vec::new();
+    if is_current {
+        if state.filter.trim().is_empty() {
+            // Fast path: with no query the matches are just every commit in order, so extend with the
+            // newly appended tail instead of re-fuzzy-filtering the whole (growing) list each page —
+            // that keeps a streaming load O(n) overall rather than O(n²).
+            let start = state.matches.len();
+            state
+                .matches
+                .extend((start..total).map(|commit_idx| MatchEntry { commit_idx }));
+        } else {
+            state.recompute_matches();
+        }
+        // Keep the previously-selected commit under the cursor across the append.
+        if let Some(ref hash) = before
+            && let Some(idx) = match_index_of(state, hash)
+        {
+            state.cursor = idx;
+        }
+        state.clamp_cursor();
+        state.clamp_scroll();
+        // The very first batch introduces a selection where there was none: load its preview/summary.
+        if state.selected_hash() != before {
+            effects.extend(on_selection_changed(state));
+        }
+    }
+    if !done {
+        effects.push(Effect::LoadLogPage {
+            view,
+            skip: total,
+            limit: page_limit(state, total),
+            epoch,
+        });
+    }
+    effects
+}
+
+/// The index into `matches` of the commit with `hash`, if it's currently visible.
+fn match_index_of(state: &AppState, hash: &str) -> Option<usize> {
+    let commits = state.commits();
+    state
+        .matches
+        .iter()
+        .position(|m| commits.get(m.commit_idx).is_some_and(|c| c.hash == hash))
+}
+
+/// Handle a failed page. Pages that already landed are kept (the load simply stops with a status
+/// message); a failure of the very first page puts the view into the failed state as before.
+fn on_log_page_failed(state: &mut AppState, view: View, epoch: u64, error: String) -> Vec<Effect> {
+    if state.log_epoch.get(&view).copied().unwrap_or(0) != epoch {
+        return vec![];
+    }
+    let is_current = view == state.view;
+    match state.logs.remove(&view) {
+        // Later page failed but earlier ones are here: keep them, stop paging, note it.
+        Some(Load::Streaming(commits)) if !commits.is_empty() => {
+            state.logs.insert(view, Load::Loaded(commits));
+            if is_current {
+                state.status = Some(format!("log load stopped: {error}"));
+            }
+        }
+        // First page failed (or nothing loaded): surface the failure.
+        _ => {
+            state.logs.insert(view, Load::Failed(error.clone()));
+            if is_current {
+                state.matches.clear();
+                state.status = Some(format!("log failed: {error}"));
+            }
+        }
+    }
+    vec![]
+}
+
 fn switch_view(state: &mut AppState, view: View) -> Vec<Effect> {
     if state.view == view {
         return vec![];
@@ -245,8 +398,7 @@ fn switch_view(state: &mut AppState, view: View) -> Vec<Effect> {
 
     let mut effects = Vec::new();
     if matches!(state.logs.get(&view), None | Some(Load::Idle)) {
-        state.logs.insert(view, Load::Loading);
-        effects.push(Effect::LoadLog(view));
+        effects.push(start_log_load(state, view));
     }
     // If the new view is already loaded, refresh preview + summary for its selection now; otherwise
     // that happens when its `LogLoaded` arrives.
@@ -452,6 +604,283 @@ mod tests {
         all
     }
 
+    // --- progressive-load helpers (LOG-21..24) ---------------------------------------------------
+
+    /// A fresh app with no commits loaded yet (unlike `app()`, which pre-seeds a `Loaded` view).
+    fn empty_app() -> AppState {
+        let mut s = AppState::new("feature".into(), "main".into(), None);
+        s.size = (80, 24);
+        s
+    }
+
+    /// `count` distinct commits starting at index `start` (unique short hashes and subjects).
+    fn commits_n(start: usize, count: usize) -> Vec<Commit> {
+        (start..start + count)
+            .map(|i| commit(&format!("{i:07x}"), &format!("commit {i}")))
+            .collect()
+    }
+
+    fn batch(skip: usize, epoch: u64, commits: Vec<Commit>) -> Event {
+        Event::LogBatch {
+            view: View::LocalHead,
+            skip,
+            epoch,
+            commits,
+        }
+    }
+
+    fn has_next_page(effects: &[Effect]) -> bool {
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadLogPage { .. }))
+    }
+
+    // LOG-21/24: the log streams in page by page — a full page keeps loading; a short page completes.
+    #[test]
+    fn log_21_pages_stream_then_complete() {
+        let mut s = empty_app();
+        s.log_page = 3;
+        let eff = start_log_load(&mut s, View::LocalHead);
+        assert_eq!(
+            eff,
+            Effect::LoadLogPage {
+                view: View::LocalHead,
+                skip: 0,
+                limit: 3,
+                epoch: 1,
+            }
+        );
+
+        // First full page → still streaming, and the next page is requested.
+        let effects = update(&mut s, batch(0, 1, commits_n(0, 3)));
+        assert!(matches!(
+            s.logs.get(&View::LocalHead),
+            Some(Load::Streaming(_))
+        ));
+        assert_eq!(s.commits().len(), 3);
+        assert!(effects.contains(&Effect::LoadLogPage {
+            view: View::LocalHead,
+            skip: 3,
+            limit: 3,
+            epoch: 1,
+        }));
+
+        // Second, short page → complete (Loaded), no further page requested.
+        let effects = update(&mut s, batch(3, 1, commits_n(3, 2)));
+        assert!(matches!(
+            s.logs.get(&View::LocalHead),
+            Some(Load::Loaded(_))
+        ));
+        assert_eq!(s.commits().len(), 5);
+        assert!(!has_next_page(&effects));
+    }
+
+    // LOG-22: the loading count is reported while streaming and clears once complete.
+    #[test]
+    fn log_22_streaming_reports_progress_then_clears() {
+        let mut s = empty_app();
+        s.log_page = 3;
+        start_log_load(&mut s, View::LocalHead);
+        update(&mut s, batch(0, 1, commits_n(0, 3)));
+        assert_eq!(s.log_loading_count(), Some(3));
+        update(&mut s, batch(3, 1, commits_n(3, 1))); // short page → done
+        assert_eq!(s.log_loading_count(), None);
+    }
+
+    // LOG-23: appending a page keeps the same commit selected even when it wasn't at the top.
+    #[test]
+    fn log_23_append_preserves_selection_while_browsing() {
+        let mut s = empty_app();
+        s.log_page = 3;
+        start_log_load(&mut s, View::LocalHead);
+        update(&mut s, batch(0, 1, commits_n(0, 3)));
+        drive(&mut s, vec![ch('j')]); // select the 2nd row
+        assert_eq!(s.cursor, 1);
+        let sel = s.selected_hash().unwrap();
+
+        update(&mut s, batch(3, 1, commits_n(3, 3))); // append older commits
+        assert_eq!(s.commits().len(), 6);
+        assert_eq!(
+            s.selected_hash().unwrap(),
+            sel,
+            "selection follows the commit, not the index"
+        );
+    }
+
+    // LOG-23: with an active filter, appending a later page keeps the same commit selected and
+    // re-filters over everything loaded so far (the cursor stays put as the match list grows).
+    #[test]
+    fn log_23_append_preserves_selection() {
+        let mut s = empty_app();
+        s.log_page = 2;
+        start_log_load(&mut s, View::LocalHead);
+        // First page: two commits, both contain the substring "fix".
+        update(
+            &mut s,
+            batch(
+                0,
+                1,
+                vec![commit("aaaaaaa", "fix one"), commit("bbbbbbb", "fix two")],
+            ),
+        );
+        s.filter = "fix".into();
+        s.recompute_matches();
+        // Select the second match.
+        s.cursor = 1;
+        let sel = s.selected_hash().unwrap();
+        assert_eq!(sel, commit("bbbbbbb", "fix two").hash);
+
+        // Append a later page: another "fix" plus a non-matching commit.
+        update(
+            &mut s,
+            batch(
+                2,
+                1,
+                vec![commit("ccccccc", "fix three"), commit("ddddddd", "nope")],
+            ),
+        );
+        assert_eq!(
+            s.matches.len(),
+            3,
+            "the three 'fix' commits match; 'nope' does not"
+        );
+        assert_eq!(
+            s.selected_hash().unwrap(),
+            sel,
+            "selection preserved across the append"
+        );
+    }
+
+    // LOG-10 regression: a fetch-reload swaps the loaded view back to `Loading`, which must also clear
+    // `matches` — otherwise the redraw before the first batch arrives indexes an empty commit slice.
+    #[test]
+    fn log_10_reload_clears_stale_matches() {
+        let mut s = app();
+        assert!(!s.matches.is_empty());
+        update(&mut s, ch('R'));
+        update(&mut s, Event::FetchFinished(Ok(())));
+        assert!(matches!(s.logs.get(&View::LocalHead), Some(Load::Loading)));
+        assert!(
+            s.matches.is_empty(),
+            "reload must clear matches so rendering can't index an empty commit slice"
+        );
+    }
+
+    // LOG-24: a small `--max-count` bounds the very first page too, so we don't fetch a full page to
+    // immediately throw most of it away.
+    #[test]
+    fn log_24_first_page_bounded_by_max_count() {
+        let mut s = empty_app();
+        s.log_page = 5000;
+        s.max_count = 2;
+        let eff = start_log_load(&mut s, View::LocalHead);
+        assert_eq!(
+            eff,
+            Effect::LoadLogPage {
+                view: View::LocalHead,
+                skip: 0,
+                limit: 2, // min(log_page, max_count), not 5000
+                epoch: 1,
+            }
+        );
+    }
+
+    // LOG-23: the empty-filter fast path produces exactly the same matches a full recompute would.
+    #[test]
+    fn log_23_incremental_matches_equal_full_recompute() {
+        let mut s = empty_app();
+        s.log_page = 3;
+        start_log_load(&mut s, View::LocalHead);
+        update(&mut s, batch(0, 1, commits_n(0, 3)));
+        update(&mut s, batch(3, 1, commits_n(3, 3)));
+        let incremental = s.matches.clone();
+        s.recompute_matches(); // authoritative full pass
+        assert_eq!(
+            incremental, s.matches,
+            "incremental append must match a full recompute"
+        );
+    }
+
+    // LOG-24: `max_count` caps the total loaded and ends the stream once reached.
+    #[test]
+    fn log_24_max_count_caps_total_and_stops() {
+        let mut s = empty_app();
+        s.log_page = 2;
+        s.max_count = 3;
+        start_log_load(&mut s, View::LocalHead);
+
+        let effects = update(&mut s, batch(0, 1, commits_n(0, 2)));
+        assert_eq!(s.commits().len(), 2, "under the cap → keep going");
+        assert!(has_next_page(&effects));
+
+        let effects = update(&mut s, batch(2, 1, commits_n(2, 2)));
+        assert_eq!(s.commits().len(), 3, "truncated to the cap");
+        assert!(matches!(
+            s.logs.get(&View::LocalHead),
+            Some(Load::Loaded(_))
+        ));
+        assert!(!has_next_page(&effects), "cap reached → stop paging");
+    }
+
+    // LOG-21: a batch from a superseded load (older epoch) is ignored, not merged in.
+    #[test]
+    fn log_21_stale_batch_ignored() {
+        let mut s = empty_app();
+        s.log_page = 2;
+        start_log_load(&mut s, View::LocalHead); // epoch 1
+        update(&mut s, batch(0, 1, commits_n(0, 2))); // streaming
+        start_log_load(&mut s, View::LocalHead); // epoch 2 → resets to Loading
+        assert!(matches!(s.logs.get(&View::LocalHead), Some(Load::Loading)));
+
+        let effects = update(&mut s, batch(2, 1, commits_n(2, 2))); // stale (epoch 1)
+        assert!(matches!(s.logs.get(&View::LocalHead), Some(Load::Loading)));
+        assert!(effects.is_empty());
+    }
+
+    // LOG-21 edge case: a page failing mid-stream keeps what already loaded and stops, with a status.
+    #[test]
+    fn log_21_mid_stream_failure_keeps_partial() {
+        let mut s = empty_app();
+        s.log_page = 2;
+        start_log_load(&mut s, View::LocalHead);
+        update(&mut s, batch(0, 1, commits_n(0, 2)));
+        let effects = update(
+            &mut s,
+            Event::LogPageFailed {
+                view: View::LocalHead,
+                epoch: 1,
+                error: "boom".into(),
+            },
+        );
+        assert_eq!(s.commits().len(), 2, "partial commits are kept");
+        assert!(matches!(
+            s.logs.get(&View::LocalHead),
+            Some(Load::Loaded(_))
+        ));
+        assert!(s.status.as_deref().unwrap().contains("stopped"));
+        assert!(effects.is_empty());
+    }
+
+    // LOG-21 edge case: the very first page failing leaves the view in the failed state.
+    #[test]
+    fn log_21_first_page_failure_marks_failed() {
+        let mut s = empty_app();
+        start_log_load(&mut s, View::LocalHead);
+        update(
+            &mut s,
+            Event::LogPageFailed {
+                view: View::LocalHead,
+                epoch: 1,
+                error: "boom".into(),
+            },
+        );
+        assert!(matches!(
+            s.logs.get(&View::LocalHead),
+            Some(Load::Failed(_))
+        ));
+        assert!(s.status.as_deref().unwrap().contains("failed"));
+    }
+
     // LOG-06: vim motions move within bounds.
     #[test]
     fn log_06_jk_moves_and_clamps() {
@@ -518,13 +947,63 @@ mod tests {
         assert_eq!(s.filter, "fi");
     }
 
+    // LOG-05: search is exact substring-per-term, not a fuzzy subsequence.
+    #[test]
+    fn log_05_search_is_exact_substring() {
+        let mut s = app();
+        // "refctor" is a subsequence of "refactor parser" but not a substring -> no matches.
+        drive(&mut s, vec![ch('/')]);
+        for c in "refctor".chars() {
+            drive(&mut s, vec![ch(c)]);
+        }
+        assert_eq!(s.matches.len(), 0, "subsequence must not match");
+        // The real substring does match.
+        drive(&mut s, vec![key(KeyCode::Backspace)]); // "refcto"
+        s.filter = "refactor".into();
+        s.recompute_matches();
+        assert_eq!(s.matches.len(), 1);
+        assert_eq!(
+            s.commits()[s.matches[0].commit_idx].subject,
+            "refactor parser"
+        );
+    }
+
+    // LOG-26: Tab toggles the diff preview while in search mode, staying in search mode.
+    #[test]
+    fn log_26_tab_toggles_preview_in_search_mode() {
+        let mut s = app();
+        drive(&mut s, vec![ch('/')]);
+        assert_eq!(s.mode, Mode::Search);
+        assert!(!s.preview_open);
+
+        let effects = drive(&mut s, vec![key(KeyCode::Tab)]);
+        assert!(s.preview_open, "Tab opens the preview in search mode");
+        assert_eq!(s.mode, Mode::Search, "still typing a search");
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::LoadDiff(_))),
+            "opening the preview requests the selected commit's diff"
+        );
+
+        drive(&mut s, vec![key(KeyCode::Tab)]);
+        assert!(!s.preview_open, "Tab again closes it");
+        assert_eq!(s.mode, Mode::Search);
+    }
+
     // LOG-07: arrows toggle view and load origin lazily.
     #[test]
     fn log_07_right_switches_to_origin_and_loads() {
         let mut s = app();
         let effects = update(&mut s, key(KeyCode::Right));
         assert_eq!(s.view, View::OriginMain);
-        assert_eq!(effects, vec![Effect::LoadLog(View::OriginMain)]);
+        assert_eq!(
+            effects,
+            vec![Effect::LoadLogPage {
+                view: View::OriginMain,
+                skip: 0,
+                limit: crate::state::model::LOG_PAGE,
+                epoch: 1,
+            }]
+        );
         assert_eq!(s.logs.get(&View::OriginMain), Some(&Load::Loading));
     }
 
@@ -534,8 +1013,10 @@ mod tests {
         update(&mut s, key(KeyCode::Right));
         update(
             &mut s,
-            Event::LogLoaded {
+            Event::LogBatch {
                 view: View::OriginMain,
+                skip: 0,
+                epoch: 1,
                 commits: vec![commit("eeeeeee", "origin tip")],
             },
         );
@@ -617,7 +1098,15 @@ mod tests {
         let effects = update(&mut s, ch('R'));
         assert_eq!(effects, vec![Effect::Fetch]);
         let effects = update(&mut s, Event::FetchFinished(Ok(())));
-        assert_eq!(effects, vec![Effect::LoadLog(View::LocalHead)]);
+        assert_eq!(
+            effects,
+            vec![Effect::LoadLogPage {
+                view: View::LocalHead,
+                skip: 0,
+                limit: crate::state::model::LOG_PAGE,
+                epoch: 1,
+            }]
+        );
     }
 
     // LOG-11: Enter opens the action menu; Esc closes it.
@@ -723,10 +1212,13 @@ mod tests {
     fn sum_02_03_initial_load_requests_summary_and_records_miss() {
         let mut s = AppState::new("feature".into(), "main".into(), None);
         s.size = (80, 24);
+        start_log_load(&mut s, View::LocalHead); // epoch 1, view Loading
         let effects = update(
             &mut s,
-            Event::LogLoaded {
+            Event::LogBatch {
                 view: View::LocalHead,
+                skip: 0,
+                epoch: 1,
                 commits: vec![commit("aaaaaaa", "add fuzzy search")],
             },
         );

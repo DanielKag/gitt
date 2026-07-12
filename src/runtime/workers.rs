@@ -10,15 +10,25 @@ use crate::state::{Effect, Event};
 
 pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
     match effect {
-        Effect::LoadLog(view) => {
+        Effect::LoadLogPage {
+            view,
+            skip,
+            limit,
+            epoch,
+        } => {
             let git = ports.git.clone();
-            let limit = ports.log_limit;
             let tx = tx.clone();
             thread::spawn(move || {
-                let ev = match git.log(view, limit) {
-                    Ok(commits) => Event::LogLoaded { view, commits },
-                    Err(e) => Event::LogFailed {
+                let ev = match git.log_page(view, skip, limit) {
+                    Ok(commits) => Event::LogBatch {
                         view,
+                        skip,
+                        epoch,
+                        commits,
+                    },
+                    Err(e) => Event::LogPageFailed {
+                        view,
+                        epoch,
                         error: e.to_string(),
                     },
                 };

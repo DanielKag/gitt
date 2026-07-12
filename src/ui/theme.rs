@@ -36,6 +36,14 @@ pub fn code() -> Style {
 pub fn menu_selected() -> Style {
     Style::new().add_modifier(Modifier::REVERSED)
 }
+/// The characters of a list row that matched the active search query (LOG-25). Black-on-yellow like a
+/// classic find highlight; bold so it still reads on a selected (reversed) row and under `NO_COLOR`.
+pub fn search_match() -> Style {
+    Style::new()
+        .fg(Color::Black)
+        .bg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
 
 // --- gitt status badges (git's own convention: green = staged, red = unstaged/untracked) ---------
 pub fn staged() -> Style {

@@ -14,7 +14,7 @@ use anyhow::Result;
 use ratatui::Frame;
 
 use crate::ports::Ports;
-use crate::state::{AppState, DiffLoad, DiffState, Effect, Event, Load, StatusLoad, StatusState};
+use crate::state::{AppState, DiffLoad, DiffState, Effect, Event, StatusLoad, StatusState};
 use crate::ui;
 use terminal::TerminalGuard;
 
@@ -43,8 +43,7 @@ impl Screen for AppState {
         self.should_quit
     }
     fn init_effects(&mut self) -> Vec<Effect> {
-        self.logs.insert(self.view, Load::Loading);
-        vec![Effect::LoadLog(self.view)]
+        vec![crate::state::reducer::start_log_load(self, self.view)]
     }
 }
 

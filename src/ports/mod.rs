@@ -33,7 +33,10 @@ pub enum GitError {
 /// Semantic access to a git repository. `log` returns already-parsed commits so the reducer never
 /// sees raw text (parsing is a separate pure function tested against fixtures).
 pub trait GitRepo: Send + Sync {
-    fn log(&self, view: View, limit: usize) -> Result<Vec<Commit>, GitError>;
+    /// One page of the log for a view: `skip` commits in, at most `limit` commits, newest first.
+    /// Returns already-parsed `Commit`s. Paging lets the shell stream a large history in behind the
+    /// first paint (see LOG-21..24).
+    fn log_page(&self, view: View, skip: usize, limit: usize) -> Result<Vec<Commit>, GitError>;
     /// `git show` for a commit. `ignore_whitespace` adds `-w` so whitespace-only churn is dropped —
     /// used for the AI summary (less noise, fewer prompt tokens); the preview passes `false` to stay
     /// faithful to the real diff.
@@ -113,6 +116,4 @@ pub struct Ports {
     pub summarizer: Arc<dyn Summarizer>,
     /// On-disk cache for generated summaries.
     pub summary_cache: Arc<dyn SummaryCache>,
-    /// Max commits to load per view.
-    pub log_limit: usize,
 }
