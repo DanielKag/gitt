@@ -2,11 +2,11 @@
 source: src/ui/branch.rs
 expression: "render_to_string(&s, 80, 12)"
 ---
- feature (branches)   3 branches
 Search:   (3 matches)
 *   feature                                  loading… 3 days ago
-    main                     ┌ wip-parser ───────┐ng… 2 weeks ago
-    wip-parser               │ Checkout          │ng… 1 hour ago
+    main                                     loading… 2 weeks ago
+    wip-parser               ┌ wip-parser ───────┐ng… 1 hour ago
+                             │ Checkout          │
                              │ Open Pull Request │
                              │ Copy name         │
 ┌ai summary──────────────────│ Delete branch     │─────────────────────────────┐

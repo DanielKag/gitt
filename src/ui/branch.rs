@@ -22,10 +22,11 @@ const DATE_WIDTH: usize = 12;
 /// Render the whole branch UI for the current state.
 pub fn draw_branch(frame: &mut Frame, state: &BranchState) {
     let area = frame.area();
+    // No header/title row: the search bar (which already shows the match count) is the top row, so the
+    // redundant branch-name title and branch count are omitted (BR-01).
     let chunks = Layout::new(
         Direction::Vertical,
         [
-            Constraint::Length(1), // header
             Constraint::Length(1), // search bar
             Constraint::Min(1),    // body (list + summary footer)
             Constraint::Length(1), // status
@@ -33,33 +34,20 @@ pub fn draw_branch(frame: &mut Frame, state: &BranchState) {
     )
     .split(area);
 
-    render_header(frame, chunks[0], state);
-    render_search(frame, chunks[1], state);
-    render_body(frame, chunks[2], state);
-    render_status(frame, chunks[3], state);
+    render_search(frame, chunks[0], state);
+    render_body(frame, chunks[1], state);
+    render_status(frame, chunks[2], state);
 
     match state.mode {
         BranchMode::Menu | BranchMode::Confirm | BranchMode::Create => dim_area(frame, area),
         BranchMode::List | BranchMode::Search => {}
     }
     match state.mode {
-        BranchMode::Menu => render_menu(frame, chunks[2], state),
-        BranchMode::Confirm => render_confirm(frame, chunks[2], state),
-        BranchMode::Create => render_create(frame, chunks[2], state),
+        BranchMode::Menu => render_menu(frame, chunks[1], state),
+        BranchMode::Confirm => render_confirm(frame, chunks[1], state),
+        BranchMode::Create => render_create(frame, chunks[1], state),
         BranchMode::List | BranchMode::Search => {}
     }
-}
-
-fn render_header(frame: &mut Frame, area: Rect, state: &BranchState) {
-    let title = format!(" {} (branches) ", state.current_branch);
-    let n = state.branches().len();
-    let noun = if n == 1 { "branch" } else { "branches" };
-    let summary = format!("  {n} {noun}");
-    let line = Line::from(vec![
-        Span::styled(title, theme::active_view()),
-        Span::styled(summary, theme::dim()),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn render_search(frame: &mut Frame, area: Rect, state: &BranchState) {
@@ -437,8 +425,9 @@ mod tests {
             }
             let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
             term.draw(|f| draw_branch(f, &s)).unwrap();
-            // A header cell is always outside the centered overlay, so it reflects the dim layer.
-            term.backend().buffer()[(0, 0)]
+            // The current-branch marker (list row 0, col 0) is styled distinctly (not dim) in the
+            // plain list and sits outside the centered overlay, so it cleanly reflects the dim layer.
+            term.backend().buffer()[(0, 1)]
                 .modifier
                 .contains(Modifier::DIM)
         };
@@ -458,8 +447,8 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
         term.draw(|f| draw_branch(f, &s)).unwrap();
         let buf = term.backend().buffer();
-        // Row index 2 is the first list row (header + search above); cursor = 0.
-        let cell = &buf[(0, 2)];
+        // Row index 1 is the first list row (only the search bar sits above it now); cursor = 0.
+        let cell = &buf[(0, 1)];
         assert!(
             cell.modifier.contains(Modifier::REVERSED),
             "selected row should be reversed"

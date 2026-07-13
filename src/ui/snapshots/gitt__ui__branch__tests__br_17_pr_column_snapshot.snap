@@ -2,11 +2,11 @@
 source: src/ui/branch.rs
 expression: out
 ---
- feature (branches)   3 branches
 Search:   (3 matches)
 *   feature                                  —        3 days ago
     main                                     merged   2 weeks ago
     wip-parser                               open     1 hour ago
+
 
 
 ┌ai summary────────────────────────────────────────────────────────────────────┐

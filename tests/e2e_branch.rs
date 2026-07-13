@@ -147,8 +147,7 @@ fn br_09_cannot_delete_current() {
     let mut tui = spawn(repo.path());
     tui.wait_for("*   main");
 
-    // main is the current branch and sorts last; jump to the bottom to select it.
-    tui.send_str("G");
+    // main is the current branch and is now pinned first, so it's selected on load — delete it.
     tui.send_str("d");
     tui.wait_for("cannot delete the current branch");
 

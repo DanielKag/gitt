@@ -9,7 +9,11 @@ use std::collections::HashMap;
 use crate::domain::{Branch, PrStatus, branch::summary_key};
 use crate::fuzzy::{self, MatchEntry};
 
-use super::model::{CHROME_ROWS, SummaryState, summary_panel_rows};
+use super::model::{SummaryState, summary_panel_rows};
+
+/// Rows of "chrome" around the branch list: search bar (1) + status (1). Unlike `gitt log` there is no
+/// header/title row (BR-01), so this is one less than the log's `CHROME_ROWS`.
+pub const BRANCH_CHROME_ROWS: u16 = 2;
 
 /// Load state of the branch list.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -154,7 +158,7 @@ impl BranchState {
         (self
             .size
             .1
-            .saturating_sub(CHROME_ROWS + self.summary_panel_rows()))
+            .saturating_sub(BRANCH_CHROME_ROWS + self.summary_panel_rows()))
         .max(1) as usize
     }
 

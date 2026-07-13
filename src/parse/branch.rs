@@ -18,11 +18,16 @@ pub const BRANCH_FORMAT: &str = "%(HEAD)\u{1f}%(refname:short)\u{1f}%(objectname
 /// Malformed records (wrong field count, unparseable timestamp, empty name) are skipped rather than
 /// aborting the whole list — one odd line should never blank the UI.
 pub fn parse_branches(raw: &str, now: i64) -> Vec<Branch> {
-    raw.split(RECORD_SEP)
+    let mut branches: Vec<Branch> = raw
+        .split(RECORD_SEP)
         .map(str::trim)
         .filter(|record| !record.is_empty())
         .filter_map(|record| parse_record(record, now))
-        .collect()
+        .collect();
+    // The current (checked-out) branch is always pinned first; the rest keep git's incoming order
+    // (`--sort=-committerdate`, i.e. most-recently-committed first). A stable sort preserves that.
+    branches.sort_by_key(|b| !b.is_current);
+    branches
 }
 
 fn parse_record(record: &str, now: i64) -> Option<Branch> {
@@ -115,6 +120,23 @@ mod tests {
         let m = &branches[1];
         assert_eq!(m.name, "main");
         assert!(!m.is_current, "the space-marked branch is not current");
+    }
+
+    // BR-01: the current branch is pinned first even when git returns it last; the rest keep git's
+    // incoming (most-recent-first) order.
+    #[test]
+    fn br_01_current_branch_sorts_first() {
+        let now = 1_000_000;
+        let raw = format!(
+            "{}{}{}",
+            record(" ", "newest", &"a".repeat(40), "", now - 86400, "n"),
+            record(" ", "older", &"b".repeat(40), "", now - 5 * 86400, "o"),
+            record("*", "current", &"c".repeat(40), "", now - 9 * 86400, "c"),
+        );
+        let branches = parse_branches(&raw, now);
+        let names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+        // Current pinned first; the remaining two keep git's incoming order.
+        assert_eq!(names, vec!["current", "newest", "older"]);
     }
 
     // BR-02: a branch with no upstream parses with `upstream: None`.

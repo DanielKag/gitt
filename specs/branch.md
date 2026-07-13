@@ -21,7 +21,7 @@ the cache distinctly from commit summaries so the two never collide.
 
 | ID     | Criterion (testable statement)                                                                                     | Tiers      |
 | ------ | ------------------------------------------------------------------------------------------------------------------ | ---------- |
-| BR-01  | Running `gitt branch` renders the local branches (most-recently-committed first), one per line: a current-branch marker, the branch name (given a wide, spaced-out column), the PR-status column, and the tip commit's relative date. The current branch is marked and styled distinctly. There is **no** commit-subject column — the name gets the freed room. | unit, e2e  |
+| BR-01  | Running `gitt branch` renders the local branches with the **current (checked-out) branch pinned first**, then the rest most-recently-committed first, one per line: a current-branch marker, the branch name (given a wide, spaced-out column), the PR-status column, and the tip commit's relative date. The current branch is marked and styled distinctly. There is **no** commit-subject column — the name gets the freed room. The screen has **no header/title row** — the search bar (which already shows the match count) is the top row, so the redundant branch-name title and branch count are omitted. | unit, e2e  |
 | BR-02  | The branch list parser turns the pinned `for-each-ref --format` output into `Branch` values (current flag, name, tip SHA, upstream, tip timestamp/subject). | unit       |
 | BR-03  | Pressing `/` enters search mode; typing filters the branches with the same exact substring-per-term (smart-case) matcher as `gitt log`, over the branch name, upstream, and tip subject; `Esc` keeps the filter. | unit, e2e  |
 | BR-04  | Vim motions move the selection: `j`/`k`, `g`/`G`, `Ctrl-d`/`Ctrl-u`, `Ctrl-f`/`Ctrl-b`. Selection never leaves bounds. | unit       |
@@ -70,8 +70,8 @@ the cache distinctly from commit summaries so the two never collide.
 `Esc` is the universal exit: it dismisses whatever overlay/search is open, and quits from the base
 list — so pressing `Esc` repeatedly always walks you out (alongside `q`).
 
-The layout mirrors `gitt log` exactly: header · search bar · branch list · AI-summary footer · status
-line. The summary footer states are identical to `gitt log`'s (hint / generating / streaming / ready /
+The layout mirrors `gitt log`, minus the header row: search bar · branch list · AI-summary footer ·
+status line. The summary footer states are identical to `gitt log`'s (hint / generating / streaming / ready /
 failed), and `S` expands it in place.
 
 ## Errors / edge cases

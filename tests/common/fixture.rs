@@ -150,8 +150,9 @@ impl TempRepo {
 
     /// A repo with a `main` baseline (pushed to a bare `origin`, so `origin/main` resolves without a
     /// network) plus two feature branches each one commit ahead of `main`: `wip-parser` (newest) and
-    /// `bugfix`. `HEAD` stays on `main`, so the branch list is deterministic (sorted by commit date:
-    /// `wip-parser`, `bugfix`, then the current `main`) and the feature branches are safely deletable.
+    /// `bugfix`. `HEAD` stays on `main`, so the branch list is deterministic (the current `main` is
+    /// pinned first, then by commit date: `wip-parser`, `bugfix`) and the feature branches are safely
+    /// deletable.
     pub fn with_branches() -> TempRepo {
         let work = tempfile::tempdir().unwrap();
         let origin = tempfile::tempdir().unwrap();
