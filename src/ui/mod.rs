@@ -1,26 +1,26 @@
 //! Pure rendering: `draw(frame, state)` reads only `&AppState` and writes only into the frame.
 //! No I/O, no port calls — so it is exercised directly with ratatui's `TestBackend`.
 
+pub mod branch;
 pub mod components;
 pub mod diff;
 pub mod status;
+pub mod summary;
 pub mod theme;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
-use crate::domain::text::wrap_words;
 use crate::domain::{Commit, Ref, View};
-use crate::state::{AppState, Mode, PreviewState, SummaryState};
+use crate::state::{AppState, Mode, PreviewState};
 
+pub use branch::draw_branch;
 pub use diff::draw_diff;
 pub use status::draw_status;
 
-use components::{
-    overlay_menu, preview_pane, split_code_spans, truncate, with_ellipsis, wrapped_pane,
-};
+use components::{highlight, overlay_menu, preview_pane, truncate};
 
 const DATE_WIDTH: usize = 13;
 const AUTHOR_WIDTH: usize = 16;
@@ -102,80 +102,12 @@ fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
     if let Some(preview_area) = preview_area {
         render_preview(frame, preview_area, state);
     }
-    render_summary(frame, rows[1], state);
-}
-
-/// The AI-summary footer for the selected commit. Prose renders markdown-style `code` spans
-/// (backticks stripped, styled distinctly). If the summary still overflows the footer it is cut with
-/// a `…`; the title reflects whether `S` will expand or minimize.
-fn render_summary(frame: &mut Frame, area: Rect, state: &AppState) {
-    let width = area.width.saturating_sub(2) as usize; // inside the border
-    let rows = area.height.saturating_sub(2) as usize; // visible content lines
-
-    let (content, overflow) = match state.selected_summary() {
-        Some(SummaryState::Ready(text)) => teaser(text, "", width, rows),
-        Some(SummaryState::Generating(buf)) if buf.trim().is_empty() => (
-            Text::from(Line::styled("summarizing with ollama…", theme::dim())),
-            false,
-        ),
-        Some(SummaryState::Generating(buf)) => teaser(buf, "▌", width, rows),
-        Some(SummaryState::Failed(error)) => (
-            Text::from(Line::styled(
-                format!("summary failed: {error}"),
-                theme::dim(),
-            )),
-            false,
-        ),
-        // Missing, or not looked up yet.
-        _ => (
-            Text::from(Line::styled("press s for an AI summary", theme::dim())),
-            false,
-        ),
-    };
-
-    let title = if state.summary_expanded {
-        "ai summary · S: minimize"
-    } else if overflow {
-        "ai summary · S: expand"
-    } else {
-        "ai summary"
-    };
-    wrapped_pane(frame, area, title, content);
-}
-
-/// Build the footer content for a summary: if it fits in `rows` lines, the full styled line; if not,
-/// the first `rows` wrapped lines (plain) with a trailing `…`. Returns `(content, overflowed)`.
-fn teaser(text: &str, suffix: &str, width: usize, rows: usize) -> (Text<'static>, bool) {
-    let plain = format!("{}{}", text.replace('`', ""), suffix);
-    let lines = wrap_words(&plain, width);
-    if rows == 0 || lines.len() <= rows {
-        (Text::from(summary_line(text, suffix)), false)
-    } else {
-        let mut shown: Vec<Line> = lines[..rows].iter().map(|l| Line::raw(l.clone())).collect();
-        let last = with_ellipsis(&lines[rows - 1], width);
-        shown[rows - 1] = Line::styled(last, theme::subject());
-        (Text::from(shown), true)
-    }
-}
-
-/// Build a summary line: normal prose in the subject style, `code` spans in the code style, with an
-/// optional trailing marker (e.g. a streaming cursor).
-fn summary_line(text: &str, suffix: &str) -> Line<'static> {
-    let mut spans: Vec<Span> = split_code_spans(text)
-        .into_iter()
-        .map(|(seg, is_code)| {
-            let style = if is_code {
-                theme::code()
-            } else {
-                theme::subject()
-            };
-            Span::styled(seg, style)
-        })
-        .collect();
-    if !suffix.is_empty() {
-        spans.push(Span::styled(suffix.to_string(), theme::subject()));
-    }
-    Line::from(spans)
+    summary::render_footer(
+        frame,
+        rows[1],
+        state.selected_summary(),
+        state.summary_expanded,
+    );
 }
 
 fn render_list(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -251,31 +183,6 @@ fn commit_line(c: &Commit, query: &str) -> Line<'static> {
         ));
     }
     Line::from(spans)
-}
-
-/// Split `text` into spans, styling the query's matched substrings with the search-match highlight
-/// (LOG-25) and everything else with `base`. With no query (or no match) the whole field is one
-/// `base` span, so an unfiltered list renders exactly as before.
-fn highlight(text: &str, query: &str, base: ratatui::style::Style) -> Vec<Span<'static>> {
-    let ranges = crate::fuzzy::match_ranges(text, query);
-    if ranges.is_empty() {
-        return vec![Span::styled(text.to_string(), base)];
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let hl = base.patch(theme::search_match());
-    let mut spans = Vec::new();
-    let mut pos = 0;
-    for (s, e) in ranges {
-        if pos < s {
-            spans.push(Span::styled(chars[pos..s].iter().collect::<String>(), base));
-        }
-        spans.push(Span::styled(chars[s..e].iter().collect::<String>(), hl));
-        pos = e;
-    }
-    if pos < chars.len() {
-        spans.push(Span::styled(chars[pos..].iter().collect::<String>(), base));
-    }
-    spans
 }
 
 fn refs_label(refs: &[Ref]) -> String {

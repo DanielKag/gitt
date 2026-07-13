@@ -64,15 +64,22 @@ fn find(hay: &[char], needle: &[char], case_sensitive: bool) -> Option<usize> {
 /// is kept only when every whitespace-separated term is a literal substring of its haystack
 /// (smart-case); matches keep their original order.
 pub fn filter(commits: &[Commit], query: &str) -> Vec<MatchEntry> {
+    filter_items(commits, query, |c| c.haystack.as_str())
+}
+
+/// Filter arbitrary `items` by `query`, with the same exact substring-per-term (smart-case)
+/// semantics as [`filter`]; `haystack` extracts each item's searchable text. Used by both the log
+/// (over `Commit`) and the branch screen (over `Branch`) so both filter identically.
+pub fn filter_items<T>(items: &[T], query: &str, haystack: impl Fn(&T) -> &str) -> Vec<MatchEntry> {
     let terms = parse_terms(query);
-    commits
+    items
         .iter()
         .enumerate()
-        .filter_map(|(commit_idx, commit)| {
+        .filter_map(|(commit_idx, item)| {
             if terms.is_empty() {
                 return Some(MatchEntry { commit_idx });
             }
-            let hay: Vec<char> = commit.haystack.chars().collect();
+            let hay: Vec<char> = haystack(item).chars().collect();
             terms
                 .iter()
                 .all(|t| find(&hay, &t.needle, t.case_sensitive).is_some())

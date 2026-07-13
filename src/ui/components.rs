@@ -5,7 +5,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Text;
+use ratatui::text::{Span, Text};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Wrap};
 
 use super::theme;
@@ -67,6 +67,31 @@ pub fn wrapped_pane(frame: &mut Frame, area: Rect, title: &str, content: Text<'s
             .block(block),
         area,
     );
+}
+
+/// Split `text` into spans, styling the query's matched substrings with the search-match highlight
+/// (LOG-25) and everything else with `base`. With no query (or no match) the whole field is one
+/// `base` span, so an unfiltered list renders exactly as before. Shared by the log and branch lists.
+pub fn highlight(text: &str, query: &str, base: ratatui::style::Style) -> Vec<Span<'static>> {
+    let ranges = crate::fuzzy::match_ranges(text, query);
+    if ranges.is_empty() {
+        return vec![Span::styled(text.to_string(), base)];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let hl = base.patch(theme::search_match());
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    for (s, e) in ranges {
+        if pos < s {
+            spans.push(Span::styled(chars[pos..s].iter().collect::<String>(), base));
+        }
+        spans.push(Span::styled(chars[s..e].iter().collect::<String>(), hl));
+        pos = e;
+    }
+    if pos < chars.len() {
+        spans.push(Span::styled(chars[pos..].iter().collect::<String>(), base));
+    }
+    spans
 }
 
 /// Cut `line` so it ends with a `…` marker within `width` columns (used when a teaser overflows).

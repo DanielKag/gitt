@@ -7,7 +7,9 @@ pub mod system;
 
 use std::sync::Arc;
 
-use crate::domain::{Commit, DiffFile, DiffKind, DiffScope, StatusEntry, View};
+use std::collections::HashMap;
+
+use crate::domain::{Branch, Commit, DiffFile, DiffKind, DiffScope, PrStatus, StatusEntry, View};
 
 /// Whether git output should include ANSI color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +68,19 @@ pub trait GitRepo: Send + Sync {
     fn diff_files(&self, scope: DiffScope) -> Result<Vec<DiffFile>, GitError>;
     /// The plain-text diff of one file for a scope (`git diff <scope-args> -- <path>`).
     fn diff_scope_file(&self, scope: DiffScope, path: &str) -> Result<String, GitError>;
+
+    // --- gitt branch -------------------------------------------------------------------------------
+    /// The local branches, parsed from `git for-each-ref refs/heads` (most-recently-committed first).
+    fn branches(&self) -> Result<Vec<Branch>, GitError>;
+    /// Create a new branch off `HEAD` and switch to it (`git switch -c <name>`).
+    fn create_branch(&self, name: &str) -> Result<(), GitError>;
+    /// Delete a local branch (`git branch -D <name>`).
+    fn delete_branch(&self, name: &str) -> Result<(), GitError>;
+    /// The whole diff of a branch against the base (`git diff <base>...<name>`), whitespace-ignored —
+    /// the input the branch AI summary reasons over.
+    fn branch_diff(&self, name: &str) -> Result<String, GitError>;
+    /// The subjects of the commits a branch has ahead of the base (`git log <base>..<name> --pretty=%s`).
+    fn branch_commit_subjects(&self, name: &str) -> Result<Vec<String>, GitError>;
 }
 
 /// A source of "now" (unix seconds) — injected so relative dates are deterministic in tests.
@@ -83,6 +98,11 @@ pub trait Browser: Send + Sync {
 
 pub trait PrOpener: Send + Sync {
     fn open_pr(&self, hash: &str) -> Result<(), GitError>;
+    /// The PR status of the current user's branches, keyed by head-branch name (`gh pr list
+    /// --author @me`). One call, run off the UI thread; a missing `gh`/non-GitHub repo surfaces as an
+    /// error (the column then simply stays blank). Scoped to the user's own PRs so it stays correct in
+    /// a busy monorepo, where an unscoped newest-N list never reaches the branches you have locally.
+    fn statuses(&self) -> Result<HashMap<String, PrStatus>, GitError>;
 }
 
 pub trait Env: Send + Sync {

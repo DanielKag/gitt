@@ -4,7 +4,7 @@
 use std::sync::mpsc::Sender;
 use std::thread;
 
-use crate::domain::summary::{build_prompt, strip_preamble};
+use crate::domain::summary::{build_branch_prompt, build_prompt, strip_preamble};
 use crate::ports::{ColorMode, GitError, GitRepo, Ports, Summarizer, SummaryCache};
 use crate::state::{Effect, Event};
 
@@ -159,6 +159,49 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
                 let _ = tx.send(ev);
             });
         }
+        Effect::LoadBranches => {
+            let git = ports.git.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let ev = match git.branches() {
+                    Ok(branches) => Event::BranchesLoaded(branches),
+                    Err(e) => Event::BranchesFailed(e.to_string()),
+                };
+                let _ = tx.send(ev);
+            });
+        }
+        Effect::LoadPrStatuses => {
+            let pr = ports.pr.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let ev = match pr.statuses() {
+                    Ok(map) => Event::PrStatusesLoaded(map),
+                    Err(e) => Event::PrStatusesFailed(e.to_string()),
+                };
+                let _ = tx.send(ev);
+            });
+        }
+        Effect::CheckoutBranch(name) => {
+            let git = ports.git.clone();
+            branch_mutation(tx, "Checked out", move || git.checkout(&name));
+        }
+        Effect::CreateBranch(name) => {
+            let git = ports.git.clone();
+            branch_mutation(tx, "Created branch", move || git.create_branch(&name));
+        }
+        Effect::DeleteBranch(name) => {
+            let git = ports.git.clone();
+            branch_mutation(tx, "Deleted branch", move || git.delete_branch(&name));
+        }
+        Effect::GenerateBranchSummary { key, branch, base } => {
+            let git = ports.git.clone();
+            let summarizer = ports.summarizer.clone();
+            let cache = ports.summary_cache.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                generate_branch_summary(&*git, &*summarizer, &*cache, &key, &branch, &base, &tx)
+            });
+        }
         Effect::CopyScopeDiff { scope, path } => {
             let git = ports.git.clone();
             let cb = ports.clipboard.clone();
@@ -233,6 +276,90 @@ fn generate_summary(
         },
     };
     let _ = tx.send(event);
+}
+
+/// Compute the branch's diff-vs-base and commit subjects, build the branch prompt, stream the
+/// summary (emitting a `SummaryChunk` per token, keyed by the branch's cache `key`), then cache the
+/// result and emit `SummaryReady`. A branch with no changes ahead of the base short-circuits to a
+/// friendly note without calling the model (BR-14). Any failure emits `SummaryFailed`.
+fn generate_branch_summary(
+    git: &dyn GitRepo,
+    summarizer: &dyn Summarizer,
+    cache: &dyn SummaryCache,
+    key: &str,
+    branch: &str,
+    base: &str,
+    tx: &Sender<Event>,
+) {
+    let fail = |error: String| Event::SummaryFailed {
+        hash: key.to_string(),
+        error,
+    };
+
+    let subjects = match git.branch_commit_subjects(branch) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = tx.send(fail(e.to_string()));
+            return;
+        }
+    };
+    let diff = match git.branch_diff(branch) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = tx.send(fail(e.to_string()));
+            return;
+        }
+    };
+
+    // BR-14: nothing ahead of the base → a friendly note, cached, no model call.
+    if diff.trim().is_empty() && subjects.is_empty() {
+        let text = format!("No changes relative to `{base}`.");
+        let _ = cache.put(key, &text);
+        let _ = tx.send(Event::SummaryReady {
+            hash: key.to_string(),
+            text,
+        });
+        return;
+    }
+
+    let prompt = build_branch_prompt(base, &subjects, &diff);
+
+    let mut acc = String::new();
+    let result = summarizer.summarize(&prompt, &mut |tok| {
+        acc.push_str(tok);
+        let _ = tx.send(Event::SummaryChunk {
+            hash: key.to_string(),
+            delta: tok.to_string(),
+        });
+    });
+
+    let event = match result {
+        Ok(()) if acc.trim().is_empty() => fail("ollama returned an empty response".to_string()),
+        Ok(()) => {
+            let summary = strip_preamble(acc.trim());
+            let _ = cache.put(key, &summary);
+            Event::SummaryReady {
+                hash: key.to_string(),
+                text: summary,
+            }
+        }
+        Err(e) => fail(e.to_string()),
+    };
+    let _ = tx.send(event);
+}
+
+/// Run a branch mutation (checkout/create/delete) on a thread, reporting via `BranchMutated` so the
+/// branch view reloads afterward (mirrors `mutation` for the status screen).
+fn branch_mutation<F>(tx: &Sender<Event>, label: &str, f: F)
+where
+    F: FnOnce() -> Result<(), GitError> + Send + 'static,
+{
+    let tx = tx.clone();
+    let label = label.to_string();
+    thread::spawn(move || {
+        let result = f().map_err(|e| e.to_string());
+        let _ = tx.send(Event::BranchMutated { label, result });
+    });
 }
 
 /// Run a working-tree mutation on a thread, reporting via `StatusMutated` so the status view reloads.

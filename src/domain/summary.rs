@@ -29,6 +29,14 @@ sentences, describe what the commit changes and why. Start directly with a prese
 Wrap file names, paths, code identifiers, commands, tools, and version numbers in `backticks`. Reply \
 with only the summary — no preamble, no headings, no bullet points, no code fences.";
 
+/// System instruction for a whole-branch summary (the branch's changes relative to its base branch).
+const BRANCH_SYSTEM: &str = "You are a senior software engineer reviewing a git branch. In one to \
+three plain sentences, describe what the branch changes and why, relative to its base branch. Start \
+directly with a present-tense verb (e.g. \"Adds\", \"Fixes\", \"Refactors\") — do NOT begin with \
+\"This branch\", \"The branch\", or similar. Wrap file names, paths, code identifiers, commands, \
+tools, and version numbers in `backticks`. Reply with only the summary — no preamble, no headings, \
+no bullet points, no code fences.";
+
 /// Resolve the Ollama model name from the `GITT_OLLAMA_MODEL` value (if any), falling back to the
 /// default. Blank/whitespace values fall back too.
 pub fn ollama_model(configured: Option<String>) -> String {
@@ -99,12 +107,14 @@ pub fn truncate_diff(diff: &str, max_lines: usize, max_chars: usize) -> String {
 /// models often add despite instructions, re-capitalizing the first surviving word. A safety net
 /// on top of the prompt; a no-op when the summary already starts with the action.
 pub fn strip_preamble(summary: &str) -> String {
-    const PREFIXES: [&str; 5] = [
+    const PREFIXES: [&str; 7] = [
         "this commit ",
         "the commit ",
         "this change ",
         "this pr ",
         "this patch ",
+        "this branch ",
+        "the branch ",
     ];
     let s = summary.trim_start();
     let lower = s.to_lowercase();
@@ -129,6 +139,25 @@ fn capitalize_first(s: &str) -> String {
 pub fn build_prompt(subject: &str, diff: &str) -> String {
     let truncated = truncate_diff(diff, MAX_DIFF_LINES, MAX_DIFF_CHARS);
     format!("{SYSTEM}\n\nCommit subject:\n{subject}\n\nDiff:\n{truncated}\n")
+}
+
+/// Build the full prompt for summarizing a **branch** relative to `base`: system instruction + the
+/// base branch name + the branch's commit subjects + its (bounded) diff against the base. Pure, so it
+/// is tested against expectations; the port layer just pipes the result to the model.
+pub fn build_branch_prompt(base: &str, subjects: &[String], diff: &str) -> String {
+    let truncated = truncate_diff(diff, MAX_DIFF_LINES, MAX_DIFF_CHARS);
+    let commits = if subjects.is_empty() {
+        "(none)".to_string()
+    } else {
+        subjects
+            .iter()
+            .map(|s| format!("- {s}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "{BRANCH_SYSTEM}\n\nBase branch:\n{base}\n\nCommits on this branch:\n{commits}\n\nDiff vs base:\n{truncated}\n"
+    )
 }
 
 #[cfg(test)]
@@ -240,6 +269,41 @@ mod tests {
             resolve_cache_dir(Some("  "), Some(""), Some("/home")),
             Some(PathBuf::from("/home/.cache/gitt/summaries"))
         );
+    }
+
+    // BR-13: the branch prompt carries the system instruction, base branch, commit subjects, and diff.
+    #[test]
+    fn br_13_branch_prompt_includes_context() {
+        let subjects = vec!["add widget".to_string(), "fix widget".to_string()];
+        let prompt = build_branch_prompt("main", &subjects, "diff --git a/x b/x\n+added");
+        assert!(
+            prompt.contains("reviewing a git branch"),
+            "branch system instruction"
+        );
+        assert!(prompt.contains("Base branch:\nmain"), "base present");
+        assert!(
+            prompt.contains("- add widget") && prompt.contains("- fix widget"),
+            "subjects listed"
+        );
+        assert!(prompt.contains("+added"), "diff body present");
+        assert!(prompt.contains("Diff vs base:"));
+    }
+
+    // BR-13: with no commits ahead, the commits section reads "(none)" rather than being blank.
+    #[test]
+    fn br_13_branch_prompt_no_commits() {
+        let prompt = build_branch_prompt("main", &[], "");
+        assert!(prompt.contains("Commits on this branch:\n(none)"));
+    }
+
+    // "This branch …" preamble is stripped like the commit forms.
+    #[test]
+    fn strip_preamble_branch_forms() {
+        assert_eq!(
+            strip_preamble("This branch adds a feature."),
+            "Adds a feature."
+        );
+        assert_eq!(strip_preamble("The branch refactors X."), "Refactors X.");
     }
 
     #[test]

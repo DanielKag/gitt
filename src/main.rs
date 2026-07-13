@@ -11,7 +11,7 @@ use gitt::ports::system::{
 };
 use gitt::ports::{Clock, Ports};
 use gitt::runtime;
-use gitt::state::{AppState, DiffState, StatusState};
+use gitt::state::{AppState, BranchState, DiffState, StatusState};
 
 #[derive(Parser)]
 #[command(name = "gitt", version, about = "Git-ty — an interactive git TUI")]
@@ -33,6 +33,8 @@ enum Command {
     Status,
     /// Browse changes interactively: unstaged, staged, working-tree, or vs the main branch.
     Diff,
+    /// Browse local branches with fuzzy search: checkout, open PR, delete, create, AI-summarize.
+    Branch,
 }
 
 fn main() -> Result<()> {
@@ -41,6 +43,7 @@ fn main() -> Result<()> {
         Command::Log { max_count } => run_log(max_count),
         Command::Status => run_status(),
         Command::Diff => run_diff(),
+        Command::Branch => run_branch(),
     }
 }
 
@@ -118,6 +121,32 @@ fn run_diff() -> Result<()> {
     // same `Ports`/`RealGit` seam is reused so effect dispatch is identical to the other screens.
     let ports = Ports {
         git: Arc::new(RealGit::new(dir, main_branch, 0)),
+        clipboard: Arc::new(RealClipboard),
+        browser: Arc::new(RealBrowser),
+        pr: Arc::new(RealPr),
+        summarizer: Arc::new(RealSummarizer),
+        summary_cache: Arc::new(RealSummaryCache),
+    };
+
+    runtime::run(state, ports)
+}
+
+fn run_branch() -> Result<()> {
+    let dir = std::env::current_dir().context("cannot determine current directory")?;
+
+    if !git_cli::is_git_repo(&dir) {
+        bail!("not a git repository (or any of the parent directories)");
+    }
+
+    let clock = RealClock;
+    let now = clock.now_unix();
+    let main_branch = git_cli::detect_main_branch(&dir);
+    let current_branch = git_cli::current_branch(&dir);
+
+    let state = BranchState::new(current_branch, main_branch.clone());
+
+    let ports = Ports {
+        git: Arc::new(RealGit::new(dir, main_branch, now)),
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),

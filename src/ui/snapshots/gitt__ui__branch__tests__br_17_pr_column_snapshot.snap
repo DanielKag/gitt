@@ -1,0 +1,16 @@
+---
+source: src/ui/branch.rs
+expression: out
+---
+ feature (branches)   3 branches
+Search:   (3 matches)
+* feature              —      3 days ago   add fuzzy search
+  main                 merged 2 weeks ago  base
+  wip-parser           open   1 hour ago   refactor parser
+
+
+┌ai summary────────────────────────────────────────────────────────────────────┐
+│press s for an AI summary                                                     │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+j/k · /search · s summary · n new · d delete · Enter · R reload · q quit

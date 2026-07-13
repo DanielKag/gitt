@@ -44,6 +44,34 @@ impl TempRepo {
         out.trim().to_string()
     }
 
+    /// The current branch name (`git rev-parse --abbrev-ref HEAD`).
+    pub fn current_branch(&self) -> String {
+        git(
+            self.work.path(),
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+            NOW,
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// The local branch names (`git branch --format=%(refname:short)`).
+    pub fn branch_names(&self) -> Vec<String> {
+        git(
+            self.work.path(),
+            &["branch", "--format=%(refname:short)"],
+            NOW,
+        )
+        .lines()
+        .map(str::to_string)
+        .collect()
+    }
+
+    /// True if a local branch named `name` exists.
+    pub fn branch_exists(&self, name: &str) -> bool {
+        self.branch_names().iter().any(|b| b == name)
+    }
+
     /// True if `rel` exists in the working tree (used to check discard of untracked files).
     pub fn exists(&self, rel: &str) -> bool {
         self.work.path().join(rel).exists()
@@ -117,6 +145,71 @@ impl TempRepo {
             work,
             _origin: origin,
             shas: HashMap::new(),
+        }
+    }
+
+    /// A repo with a `main` baseline (pushed to a bare `origin`, so `origin/main` resolves without a
+    /// network) plus two feature branches each one commit ahead of `main`: `wip-parser` (newest) and
+    /// `bugfix`. `HEAD` stays on `main`, so the branch list is deterministic (sorted by commit date:
+    /// `wip-parser`, `bugfix`, then the current `main`) and the feature branches are safely deletable.
+    pub fn with_branches() -> TempRepo {
+        let work = tempfile::tempdir().unwrap();
+        let origin = tempfile::tempdir().unwrap();
+        let wp = work.path();
+
+        git(wp, &["init", "-b", "main"], NOW);
+        git(wp, &["config", "user.name", "Tester"], NOW);
+        git(wp, &["config", "user.email", "tester@example.com"], NOW);
+
+        let mut shas = HashMap::new();
+
+        std::fs::write(wp.join("base.txt"), "base\n").unwrap();
+        git(wp, &["add", "-A"], NOW - 40 * DAY);
+        git(wp, &["commit", "-m", "base"], NOW - 40 * DAY);
+        shas.insert(
+            "base".to_string(),
+            git(wp, &["rev-parse", "HEAD"], NOW).trim().to_string(),
+        );
+
+        // Wire a bare origin and push main, then set origin/HEAD (main-branch detection via symref).
+        let origin_path = origin.path().join("repo.git");
+        git(wp, &["init", "--bare", origin_path.to_str().unwrap()], NOW);
+        git(
+            wp,
+            &["remote", "add", "origin", origin_path.to_str().unwrap()],
+            NOW,
+        );
+        git(wp, &["push", "-u", "origin", "main"], NOW);
+        git(wp, &["remote", "set-head", "origin", "main"], NOW);
+
+        // `bugfix`, one commit ahead of main (older).
+        git(wp, &["checkout", "-b", "bugfix"], NOW - 5 * DAY);
+        std::fs::write(wp.join("bug.txt"), "bug fix\n").unwrap();
+        git(wp, &["add", "-A"], NOW - 5 * DAY);
+        git(wp, &["commit", "-m", "fix the bug"], NOW - 5 * DAY);
+        shas.insert(
+            "fix the bug".to_string(),
+            git(wp, &["rev-parse", "HEAD"], NOW).trim().to_string(),
+        );
+
+        // `wip-parser`, one commit ahead of main (newest → sorts first).
+        git(wp, &["checkout", "main"], NOW);
+        git(wp, &["checkout", "-b", "wip-parser"], NOW - 2 * DAY);
+        std::fs::write(wp.join("parser.txt"), "parser work\n").unwrap();
+        git(wp, &["add", "-A"], NOW - 2 * DAY);
+        git(wp, &["commit", "-m", "refactor parser"], NOW - 2 * DAY);
+        shas.insert(
+            "refactor parser".to_string(),
+            git(wp, &["rev-parse", "HEAD"], NOW).trim().to_string(),
+        );
+
+        // Land back on `main` as the current branch.
+        git(wp, &["checkout", "main"], NOW);
+
+        TempRepo {
+            work,
+            _origin: origin,
+            shas,
         }
     }
 

@@ -190,35 +190,9 @@ impl AppState {
         }
     }
 
-    /// Height (rows) of the summary footer, including its border. Collapsed it is [`SUMMARY_ROWS`];
-    /// expanded it grows to fit the selected commit's summary (word-wrapped to the current width),
-    /// floored at [`SUMMARY_ROWS`] and capped so the list keeps at least a few rows. Computed the
-    /// same way the UI lays it out, so list scroll math and rendering agree.
+    /// Height (rows) of the summary footer, including its border. See [`summary_panel_rows`].
     pub fn summary_panel_rows(&self) -> u16 {
-        if !self.summary_expanded {
-            return SUMMARY_ROWS;
-        }
-        let width = self.size.0.saturating_sub(2).max(1) as usize;
-        let content = text::wrap_words(&self.summary_display_text(), width)
-            .len()
-            .max(1) as u16;
-        let cap = self
-            .size
-            .1
-            .saturating_sub(CHROME_ROWS + 3)
-            .max(SUMMARY_ROWS);
-        (content + 2).clamp(SUMMARY_ROWS, cap)
-    }
-
-    /// The plain (backticks stripped) text shown for the selected commit's summary — used to size the
-    /// expanded footer. Empty when there's nothing substantial to show (so the footer stays at floor).
-    fn summary_display_text(&self) -> String {
-        match self.selected_summary() {
-            Some(SummaryState::Ready(t)) => t.replace('`', ""),
-            Some(SummaryState::Generating(b)) if !b.trim().is_empty() => b.replace('`', ""),
-            Some(SummaryState::Failed(e)) => format!("summary failed: {e}"),
-            _ => String::new(),
-        }
+        summary_panel_rows(self.selected_summary(), self.summary_expanded, self.size)
     }
 
     /// Number of commit rows visible in the list given the current terminal height, accounting for
@@ -299,5 +273,33 @@ impl AppState {
         if self.top > max_top {
             self.top = max_top;
         }
+    }
+}
+
+/// Height (rows) of the AI-summary footer, including its border, for a given summary state. Collapsed
+/// it is [`SUMMARY_ROWS`]; expanded it grows to fit the summary (word-wrapped to the current width),
+/// floored at [`SUMMARY_ROWS`] and capped so the list keeps at least a few rows. Computed the same
+/// way the UI lays it out, so list scroll math and rendering agree. Shared by `gitt log` and
+/// `gitt branch`, which render an identical footer.
+pub fn summary_panel_rows(summary: Option<&SummaryState>, expanded: bool, size: (u16, u16)) -> u16 {
+    if !expanded {
+        return SUMMARY_ROWS;
+    }
+    let width = size.0.saturating_sub(2).max(1) as usize;
+    let content = text::wrap_words(&summary_display_text(summary), width)
+        .len()
+        .max(1) as u16;
+    let cap = size.1.saturating_sub(CHROME_ROWS + 3).max(SUMMARY_ROWS);
+    (content + 2).clamp(SUMMARY_ROWS, cap)
+}
+
+/// The plain (backticks stripped) text shown for a summary — used to size the expanded footer. Empty
+/// when there's nothing substantial to show (so the footer stays at its floor).
+pub fn summary_display_text(summary: Option<&SummaryState>) -> String {
+    match summary {
+        Some(SummaryState::Ready(t)) => t.replace('`', ""),
+        Some(SummaryState::Generating(b)) if !b.trim().is_empty() => b.replace('`', ""),
+        Some(SummaryState::Failed(e)) => format!("summary failed: {e}"),
+        _ => String::new(),
     }
 }

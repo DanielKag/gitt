@@ -14,7 +14,9 @@ use anyhow::Result;
 use ratatui::Frame;
 
 use crate::ports::Ports;
-use crate::state::{AppState, DiffLoad, DiffState, Effect, Event, StatusLoad, StatusState};
+use crate::state::{
+    AppState, BranchLoad, BranchState, DiffLoad, DiffState, Effect, Event, StatusLoad, StatusState,
+};
 use crate::ui;
 use terminal::TerminalGuard;
 
@@ -76,6 +78,23 @@ impl Screen for DiffState {
     fn init_effects(&mut self) -> Vec<Effect> {
         self.loads.insert(self.scope, DiffLoad::Loading);
         vec![Effect::LoadDiffFiles(self.scope)]
+    }
+}
+
+impl Screen for BranchState {
+    fn update(&mut self, event: Event) -> Vec<Effect> {
+        crate::state::update_branch(self, event)
+    }
+    fn draw(&self, frame: &mut Frame) {
+        ui::draw_branch(frame, self);
+    }
+    fn should_quit(&self) -> bool {
+        self.should_quit
+    }
+    fn init_effects(&mut self) -> Vec<Effect> {
+        self.load = BranchLoad::Loading;
+        // Fetch the branch list and the PR statuses in parallel; neither blocks the first paint.
+        vec![Effect::LoadBranches, Effect::LoadPrStatuses]
     }
 }
 

@@ -43,6 +43,24 @@ pub enum Effect {
     /// Discard a file's changes (`git restore` for tracked, delete for untracked).
     Discard { path: String, untracked: bool },
 
+    // --- gitt branch ---------------------------------------------------------------------------
+    /// Load (or reload) the local branch list.
+    LoadBranches,
+    /// Fetch the per-branch PR status (one background `gh pr list` call) to fill the PR column.
+    LoadPrStatuses,
+    /// Check out a branch by name (attaches HEAD to it), then reload the branch list.
+    CheckoutBranch(String),
+    /// Create a new branch off HEAD and switch to it, then reload the branch list.
+    CreateBranch(String),
+    /// Delete a local branch, then reload the branch list.
+    DeleteBranch(String),
+    /// Generate a branch's AI summary from its diff-vs-base and commit subjects, cache it under `key`.
+    GenerateBranchSummary {
+        key: String,
+        branch: String,
+        base: String,
+    },
+
     // --- gitt diff -----------------------------------------------------------------------------
     /// Load (or reload) the changed-file list for a diff scope.
     LoadDiffFiles(DiffScope),

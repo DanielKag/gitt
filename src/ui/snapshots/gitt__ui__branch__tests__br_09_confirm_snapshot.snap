@@ -1,0 +1,16 @@
+---
+source: src/ui/branch.rs
+expression: "render_to_string(&s, 80, 12)"
+---
+ feature (branches)   3 branches
+Search:   (3 matches)
+* feature                     3 days ago   add fuzzy search
+  main                        2 weeks ago  base
+  wip-parser             ┌ Delete branch? ───────────┐rser
+                         │ Delete branch wip-parser? │
+                         │ y  delete    n  cancel    │
+┌ai summary──────────────└───────────────────────────┘─────────────────────────┐
+│press s for an AI summary                                                     │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+j/k · /search · s summary · n new · d delete · Enter · R reload · q quit

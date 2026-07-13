@@ -5,13 +5,16 @@
 //! tests assert on exactly what the real code path produced, without launching a browser or writing
 //! to the real system clipboard.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{Browser, Clipboard, Clock, Env, GitError, PrOpener, Summarizer, SummaryCache};
+use crate::domain::PrStatus;
 use crate::domain::summary::{ollama_generate_url, ollama_model, resolve_cache_dir};
+use crate::parse::parse_pr_list;
 
 /// System clock, overridable by `GITT_NOW=<unix>` for deterministic tests.
 pub struct RealClock;
@@ -95,6 +98,33 @@ impl PrOpener for RealPr {
         }
         // Best-effort: ask gh to open the PR associated with this commit in the browser.
         run("gh", &["pr", "view", hash, "--web"])
+    }
+
+    fn statuses(&self) -> Result<HashMap<String, PrStatus>, GitError> {
+        // Test seam: a canned `gh` JSON payload keeps the PR column deterministic without a network.
+        if let Ok(fake) = std::env::var("GITT_FAKE_PR_JSON") {
+            return Ok(parse_pr_list(&fake));
+        }
+        // One `gh` call covers every branch. It is scoped to the current user's PRs (`--author @me`):
+        // in a busy monorepo an unscoped newest-N list is filled with unrelated org/bot PRs and never
+        // reaches the branches you actually have checked out (which are your own work). Failure
+        // (missing gh / non-GitHub repo) leaves the column blank rather than erroring the screen.
+        let json = capture(
+            "gh",
+            &[
+                "pr",
+                "list",
+                "--author",
+                "@me",
+                "--state",
+                "all",
+                "--limit",
+                "300",
+                "--json",
+                "headRefName,state,isDraft",
+            ],
+        )?;
+        Ok(parse_pr_list(&json))
     }
 }
 
@@ -279,6 +309,24 @@ fn run(cmd: &str, args: &[&str]) -> Result<(), GitError> {
         Ok(())
     } else {
         Err(GitError::Io(format!("{cmd} exited with {status}")))
+    }
+}
+
+/// Run `cmd <args>` and return its stdout on success (used to capture `gh`'s JSON output).
+fn capture(cmd: &str, args: &[&str]) -> Result<String, GitError> {
+    let output = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| GitError::Io(format!("{cmd}: {e}")))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(GitError::Io(format!(
+            "{cmd} exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
     }
 }
 

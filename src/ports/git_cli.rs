@@ -5,8 +5,10 @@ use std::process::Command;
 
 use super::{ColorMode, GitError, GitRepo};
 use crate::domain::{
-    Commit, DiffFile, DiffKind, DiffScope, StatusEntry, View, main_branch::resolve_main_branch,
+    Branch, Commit, DiffFile, DiffKind, DiffScope, StatusEntry, View,
+    main_branch::resolve_main_branch,
 };
+use crate::parse::branch::{BRANCH_FORMAT, parse_branches};
 use crate::parse::diff::parse_diff_name_status;
 use crate::parse::log::{PRETTY_FORMAT, parse_log};
 use crate::parse::remote::parse_remote_show;
@@ -156,6 +158,43 @@ impl GitRepo for RealGit {
         args.push("--");
         args.push(path);
         self.run(&args)
+    }
+
+    fn branches(&self) -> Result<Vec<Branch>, GitError> {
+        let format_arg = format!("--format={BRANCH_FORMAT}");
+        let raw = self.run(&[
+            "for-each-ref",
+            "--sort=-committerdate",
+            &format_arg,
+            "refs/heads/",
+        ])?;
+        Ok(parse_branches(&raw, self.now))
+    }
+
+    fn create_branch(&self, name: &str) -> Result<(), GitError> {
+        self.run(&["switch", "--create", name]).map(|_| ())
+    }
+
+    fn delete_branch(&self, name: &str) -> Result<(), GitError> {
+        self.run(&["branch", "-D", name]).map(|_| ())
+    }
+
+    fn branch_diff(&self, name: &str) -> Result<String, GitError> {
+        // Three-dot: the branch's changes since it diverged from the base (the GitHub-PR diff), with
+        // whitespace churn ignored to keep the summary prompt small/faithful.
+        let range = format!("{}...{name}", self.branch_base());
+        self.run(&["diff", "--no-color", "-w", &range])
+    }
+
+    fn branch_commit_subjects(&self, name: &str) -> Result<Vec<String>, GitError> {
+        // Two-dot: the commits reachable from the branch but not the base.
+        let range = format!("{}..{name}", self.branch_base());
+        let raw = self.run(&["log", "--no-color", "--pretty=format:%s", &range])?;
+        Ok(raw
+            .lines()
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+            .collect())
     }
 }
 

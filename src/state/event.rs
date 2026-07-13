@@ -1,7 +1,9 @@
 //! Events: everything that can drive the reducer. Terminal input plus async results routed back
 //! from the shell's worker threads.
 
-use crate::domain::{Commit, DiffFile, DiffScope, StatusEntry, View};
+use std::collections::HashMap;
+
+use crate::domain::{Branch, Commit, DiffFile, DiffScope, PrStatus, StatusEntry, View};
 use crossterm::event::KeyEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +52,21 @@ pub enum Event {
     SummaryReady { hash: String, text: String },
     /// Generating a commit's summary failed.
     SummaryFailed { hash: String, error: String },
+
+    // --- gitt branch ---------------------------------------------------------------------------
+    /// The local branch list finished loading.
+    BranchesLoaded(Vec<Branch>),
+    /// The local branch list failed to load.
+    BranchesFailed(String),
+    /// A branch mutation (checkout/create/delete) finished; the branch view reloads afterward.
+    BranchMutated {
+        label: String,
+        result: Result<(), String>,
+    },
+    /// The per-branch PR statuses finished loading (fills the PR column).
+    PrStatusesLoaded(HashMap<String, PrStatus>),
+    /// The per-branch PR statuses failed to load (e.g. no `gh` / not a GitHub repo); column stays blank.
+    PrStatusesFailed(String),
 
     // --- gitt status ---------------------------------------------------------------------------
     /// The working-tree status finished loading.

@@ -91,8 +91,8 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
             state.summaries.insert(hash, SummaryState::Failed(error));
             vec![]
         }
-        // Status- and diff-screen events never reach the log reducer at runtime (separate screens);
-        // ignore them.
+        // Status-, diff-, and branch-screen events never reach the log reducer at runtime (separate
+        // screens); ignore them.
         Event::StatusLoaded(_)
         | Event::StatusFailed(_)
         | Event::FileDiffLoaded { .. }
@@ -101,7 +101,12 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
         | Event::DiffFilesLoaded { .. }
         | Event::DiffFilesFailed { .. }
         | Event::DiffTextLoaded { .. }
-        | Event::DiffTextFailed { .. } => vec![],
+        | Event::DiffTextFailed { .. }
+        | Event::BranchesLoaded(_)
+        | Event::BranchesFailed(_)
+        | Event::BranchMutated { .. }
+        | Event::PrStatusesLoaded(_)
+        | Event::PrStatusesFailed(_) => vec![],
     }
 }
 
