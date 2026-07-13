@@ -29,6 +29,11 @@ pub fn inactive_view() -> Style {
 pub fn dim() -> Style {
     Style::new().add_modifier(Modifier::DIM)
 }
+/// A dominant error message on the status line (e.g. a failed checkout): red + bold so it's hard to
+/// miss and still legible under `NO_COLOR`.
+pub fn error() -> Style {
+    Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)
+}
 /// Inline `code` spans in AI summaries: light text on a subtle grey block, like markdown code.
 pub fn code() -> Style {
     Style::new().fg(Color::Indexed(252)).bg(Color::Indexed(237))

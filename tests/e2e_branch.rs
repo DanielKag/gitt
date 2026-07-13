@@ -69,6 +69,41 @@ fn br_05_06_checkout_moves_head() {
     assert_eq!(repo.head(), repo.sha("refactor parser"));
 }
 
+// BR-06: a failed checkout keeps gitt open and reports only git's own message (no invoked command /
+// exit code). We provoke it with an untracked file that `wip-parser` would overwrite.
+#[test]
+fn br_06_checkout_failure_reports_concise_error() {
+    let repo = TempRepo::with_branches();
+    // `wip-parser` tracks `parser.txt`; an untracked copy on `main` makes the checkout refuse.
+    std::fs::write(repo.path().join("parser.txt"), "conflict\n").unwrap();
+
+    let mut tui = spawn(repo.path());
+    tui.wait_for("wip-parser");
+    tui.send_str("/");
+    tui.send_str("wip");
+    tui.wait_for("wip-parser");
+    tui.enter(); // leave search
+    tui.enter(); // open menu
+    tui.wait_for("Checkout");
+    tui.enter(); // Checkout
+
+    // The failure surfaces on the status line; gitt stays open (HEAD unmoved).
+    tui.wait_for("Checkout failed");
+    let screen = tui.screen();
+    assert!(
+        !screen.contains("checkout --quiet") && !screen.contains("failed ("),
+        "the invoked command and exit code are dropped — only git's message shows:\n{screen}"
+    );
+
+    tui.send_str("q");
+    tui.wait_exit();
+    assert_eq!(
+        repo.current_branch(),
+        "main",
+        "a failed checkout leaves HEAD put"
+    );
+}
+
 // BR-08: "Copy name" places the selected branch name on the clipboard.
 #[test]
 fn br_08_copy_name() {

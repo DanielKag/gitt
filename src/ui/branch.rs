@@ -175,10 +175,16 @@ fn pr_span(pr: Option<PrStatus>, pr_loaded: bool) -> Span<'static> {
 }
 
 fn render_status(frame: &mut Frame, area: Rect, state: &BranchState) {
-    let text = state.status.clone().unwrap_or_else(|| {
-        "j/k · /search · s summary · n new · d delete · Enter · R reload · q quit".to_string()
-    });
-    frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
+    let (text, style) = match &state.status {
+        // An error (e.g. a failed checkout) is shown in dominant red for visibility.
+        Some(msg) if state.status_is_error => (msg.clone(), theme::error()),
+        Some(msg) => (msg.clone(), theme::dim()),
+        None => (
+            "j/k · /search · s summary · n new · d delete · Enter · R reload · q quit".to_string(),
+            theme::dim(),
+        ),
+    };
+    frame.render_widget(Paragraph::new(Line::styled(text, style)), area);
 }
 
 fn render_menu(frame: &mut Frame, body: Rect, state: &BranchState) {
@@ -434,6 +440,23 @@ mod tests {
 
         assert!(dimmed_at(BranchMode::Menu), "menu dims the background");
         assert!(!dimmed_at(BranchMode::List), "the plain list is not dimmed");
+    }
+
+    // BR-06: a failed checkout is reported on the status line in dominant red (not the dim legend).
+    #[test]
+    fn error_status_is_red() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+
+        let mut s = app();
+        s.set_error("Checkout failed: fatal: 'master' is already checked out");
+        let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        term.draw(|f| draw_branch(f, &s)).unwrap();
+        let buf = term.backend().buffer();
+        // The status line is the last row; its first cell carries the error colour.
+        let cell = &buf[(0, 11)];
+        assert_eq!(cell.fg, Color::Red, "error status is red for visibility");
     }
 
     // Selected row is reversed, consistent with the log/status/diff lists.

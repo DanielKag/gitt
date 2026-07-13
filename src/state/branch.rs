@@ -118,6 +118,8 @@ pub struct BranchState {
     pub summary_expanded: bool,
     /// Transient status-line message.
     pub status: Option<String>,
+    /// Whether the current `status` is an error (rendered in dominant red) vs. an informational note.
+    pub status_is_error: bool,
     pub current_branch: String,
     pub main_branch: String,
     /// Terminal size (cols, rows).
@@ -141,11 +143,24 @@ impl BranchState {
             pr_statuses: None,
             summary_expanded: false,
             status: None,
+            status_is_error: false,
             current_branch,
             main_branch,
             size: (80, 24),
             should_quit: false,
         }
+    }
+
+    /// Set an informational status-line message (rendered dim).
+    pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_is_error = false;
+    }
+
+    /// Set an error status-line message (rendered in dominant red for visibility).
+    pub fn set_error(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_is_error = true;
     }
 
     /// Height (rows) of the summary footer — identical to `gitt log`'s (shared layout math).

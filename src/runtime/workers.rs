@@ -200,7 +200,7 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
             let git = ports.git.clone();
             let tx = tx.clone();
             thread::spawn(move || {
-                let result = git.checkout(&name).map_err(|e| e.to_string());
+                let result = git.checkout(&name).map_err(|e| e.concise());
                 let _ = tx.send(Event::BranchCheckedOut {
                     branch: name,
                     result,
@@ -379,7 +379,7 @@ where
     let tx = tx.clone();
     let label = label.to_string();
     thread::spawn(move || {
-        let result = f().map_err(|e| e.to_string());
+        let result = f().map_err(|e| e.concise());
         let _ = tx.send(Event::BranchMutated { label, result });
     });
 }

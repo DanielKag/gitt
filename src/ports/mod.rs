@@ -32,6 +32,19 @@ pub enum GitError {
     Io(String),
 }
 
+impl GitError {
+    /// A short, user-facing message for a status line: for a failed command, just git's own stderr
+    /// (dropping the invoked command and exit code, which are noise to a user); otherwise the full
+    /// message. E.g. ``git checkout` failed (128): fatal: 'x' is already checked out`` → `fatal: 'x'
+    /// is already checked out`.
+    pub fn concise(&self) -> String {
+        match self {
+            GitError::Exit { stderr, .. } if !stderr.trim().is_empty() => stderr.trim().to_string(),
+            other => other.to_string(),
+        }
+    }
+}
+
 /// Semantic access to a git repository. `log` returns already-parsed commits so the reducer never
 /// sees raw text (parsing is a separate pure function tested against fixtures).
 pub trait GitRepo: Send + Sync {
@@ -136,4 +149,32 @@ pub struct Ports {
     pub summarizer: Arc<dyn Summarizer>,
     /// On-disk cache for generated summaries.
     pub summary_cache: Arc<dyn SummaryCache>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concise_error_keeps_only_git_stderr() {
+        let e = GitError::Exit {
+            cmd: "git checkout --quiet master".into(),
+            code: 128,
+            stderr: "fatal: 'master' is already checked out".into(),
+        };
+        // The command and exit code are dropped; only git's own message remains.
+        assert_eq!(e.concise(), "fatal: 'master' is already checked out");
+    }
+
+    #[test]
+    fn concise_error_falls_back_to_full_message() {
+        // With no stderr, keep the (still useful) full message rather than an empty status.
+        let e = GitError::Exit {
+            cmd: "git checkout x".into(),
+            code: 1,
+            stderr: "   ".into(),
+        };
+        assert_eq!(e.concise(), "`git checkout x` failed (1):    ");
+        assert_eq!(GitError::NotARepo.concise(), "not a git repository");
+    }
 }

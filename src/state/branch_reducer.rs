@@ -26,38 +26,39 @@ pub fn update_branch(state: &mut BranchState, event: Event) -> Vec<Effect> {
         }
         Event::BranchesLoaded(branches) => on_branches_loaded(state, branches),
         Event::BranchesFailed(error) => {
-            state.status = Some(format!("branches failed: {error}"));
+            state.set_error(format!("branches failed: {error}"));
             state.load = BranchLoad::Failed(error);
             state.matches.clear();
             vec![]
         }
         // A create/delete finished: report it, then reload so the list can't drift.
         Event::BranchMutated { label, result } => {
-            state.status = Some(match result {
-                Ok(()) => label,
-                Err(e) => format!("{label} failed: {e}"),
-            });
+            match result {
+                Ok(()) => state.set_status(label),
+                Err(e) => state.set_error(format!("{label} failed: {e}")),
+            }
             vec![Effect::LoadBranches]
         }
         // A checkout finished. On success we quit immediately (git-native), leaving the
-        // "Checked out <branch>" line as the exit report; on failure we stay and show the error.
+        // "Checked out <branch>" line as the exit report; on failure we stay and show the error in
+        // dominant red (just git's own message — the command and exit code are dropped upstream).
         Event::BranchCheckedOut { branch, result } => match result {
             Ok(()) => {
-                state.status = Some(format!("Checked out {branch}"));
+                state.set_status(format!("Checked out {branch}"));
                 state.should_quit = true;
                 vec![Effect::Quit]
             }
             Err(e) => {
-                state.status = Some(format!("Checkout failed: {e}"));
+                state.set_error(format!("Checkout failed: {e}"));
                 vec![]
             }
         },
         // A copy/PR action finished; report its outcome (no reload — it didn't change the list).
         Event::ActionFinished { label, result } => {
-            state.status = Some(match result {
-                Ok(()) => label,
-                Err(e) => format!("{label} failed: {e}"),
-            });
+            match result {
+                Ok(()) => state.set_status(label),
+                Err(e) => state.set_error(format!("{label} failed: {e}")),
+            }
             vec![]
         }
         // --- AI summary (same events as gitt log, keyed by the branch summary cache key) ----------
@@ -283,7 +284,7 @@ fn quit(state: &mut BranchState) -> Vec<Effect> {
 }
 
 fn reload(state: &mut BranchState) -> Vec<Effect> {
-    state.status = Some("reloading…".to_string());
+    state.set_status("reloading…");
     // Refetch PR statuses too, so `R` picks up PRs opened/merged since the screen opened.
     vec![Effect::LoadBranches, Effect::LoadPrStatuses]
 }
@@ -378,24 +379,24 @@ fn execute_menu(state: &mut BranchState) -> Vec<Effect> {
     match action {
         BranchAction::Checkout => {
             state.mode = BranchMode::List;
-            state.status = Some(format!("Checking out {name}…"));
+            state.set_status(format!("Checking out {name}…"));
             vec![Effect::CheckoutBranch(name)]
         }
         BranchAction::OpenPr => {
             state.mode = BranchMode::List;
-            state.status = Some("Opening PR…".to_string());
+            state.set_status("Opening PR…");
             vec![Effect::OpenPr(name)]
         }
         BranchAction::CopyName => {
             state.mode = BranchMode::List;
-            state.status = Some("Copied branch name".to_string());
+            state.set_status("Copied branch name");
             vec![Effect::CopyToClipboard(name)]
         }
         BranchAction::Delete => {
             // Route through the mandatory confirmation overlay (and refuse the current branch).
             if menu.is_current {
                 state.mode = BranchMode::List;
-                state.status = Some("cannot delete the current branch".to_string());
+                state.set_error("cannot delete the current branch");
                 vec![]
             } else {
                 state.confirm = Some(ConfirmDelete { name });
@@ -410,7 +411,7 @@ fn execute_menu(state: &mut BranchState) -> Vec<Effect> {
 fn open_confirm(state: &mut BranchState) -> Vec<Effect> {
     match state.selected() {
         Some(branch) if branch.is_current => {
-            state.status = Some("cannot delete the current branch".to_string());
+            state.set_error("cannot delete the current branch");
             vec![]
         }
         Some(branch) => {
@@ -428,7 +429,7 @@ fn confirm_delete(state: &mut BranchState) -> Vec<Effect> {
     state.mode = BranchMode::List;
     match state.confirm.take() {
         Some(c) => {
-            state.status = Some(format!("Deleting {}…", c.name));
+            state.set_status(format!("Deleting {}…", c.name));
             vec![Effect::DeleteBranch(c.name)]
         }
         None => vec![],
@@ -442,7 +443,7 @@ fn create_branch(state: &mut BranchState) -> Vec<Effect> {
     }
     state.create_input.clear();
     state.mode = BranchMode::List;
-    state.status = Some(format!("Creating {name}…"));
+    state.set_status(format!("Creating {name}…"));
     vec![Effect::CreateBranch(name)]
 }
 
