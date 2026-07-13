@@ -43,7 +43,8 @@ fn br_03_search_narrows_list() {
     tui.wait_exit();
 }
 
-// BR-05 / BR-06: Enter opens the menu; "Checkout" actually moves HEAD onto the selected branch.
+// BR-05 / BR-06: Enter opens the menu; "Checkout" moves HEAD onto the selected branch and, on
+// success, gitt quits immediately (like a native `git checkout`), leaving a one-line exit report.
 #[test]
 fn br_05_06_checkout_moves_head() {
     let repo = TempRepo::with_branches();
@@ -59,9 +60,9 @@ fn br_05_06_checkout_moves_head() {
     tui.enter(); // open menu
     tui.wait_for("Checkout");
     tui.enter(); // Checkout is the first item
-    tui.wait_for("Checked out");
 
-    tui.send_str("q");
+    // A successful checkout exits gitt on its own — no `q` needed — leaving the exit report behind.
+    tui.wait_for("Checked out wip-parser");
     tui.wait_exit();
 
     assert_eq!(repo.current_branch(), "wip-parser");
@@ -292,15 +293,17 @@ fn clean_footprint_on_exit_with_report() {
     let mut tui = spawn(repo.path());
     tui.wait_for("wip-parser");
 
-    // Do an action so there's something to report, then quit.
+    // Do a (non-terminal) action so there's something to report, then quit. Checkout would exit on
+    // its own, so use "Copy name", which leaves the screen open with a status to report.
     tui.send_str("/");
     tui.send_str("wip");
     tui.wait_for("wip-parser");
     tui.enter(); // leave search
     tui.enter(); // open menu
-    tui.wait_for("Checkout");
-    tui.enter(); // Checkout
-    tui.wait_for("Checked out");
+    tui.wait_for("Copy name");
+    tui.send_str("jj"); // Checkout → Open PR → Copy name
+    tui.enter();
+    tui.wait_for("Copied to clipboard");
 
     tui.send_str("q");
     tui.wait_exit();
@@ -308,7 +311,7 @@ fn clean_footprint_on_exit_with_report() {
     // After exit the UI chrome is gone and the action is reported on a persistent line.
     let screen = tui.screen();
     assert!(
-        screen.contains("Checked out"),
+        screen.contains("Copied to clipboard"),
         "exit reports what happened:\n{screen}"
     );
     assert!(

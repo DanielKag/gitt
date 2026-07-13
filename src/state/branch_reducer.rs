@@ -1,9 +1,10 @@
 //! The pure state transition for `gitt branch`. `update_branch` is the single entry point.
 //!
-//! Checkout/create/delete emit an [`Effect`] and, when it finishes, the shell reports back a
-//! `BranchMutated` event that reloads the list from git — so the view (including the current-branch
-//! marker) always reflects real repo state rather than an optimistic guess. The AI-summary plumbing
-//! reuses the same events as `gitt log`, keyed by the branch's summary cache key.
+//! Checkout/create/delete emit an [`Effect`] and, when it finishes, the shell reports back an event.
+//! Create/delete send `BranchMutated`, which reloads the list from git so the view always reflects
+//! real repo state rather than an optimistic guess. A successful checkout instead sends
+//! `BranchCheckedOut` and `gitt` quits immediately — like a native `git checkout` (BR-06). The
+//! AI-summary plumbing reuses the same events as `gitt log`, keyed by the branch's summary cache key.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -30,7 +31,7 @@ pub fn update_branch(state: &mut BranchState, event: Event) -> Vec<Effect> {
             state.matches.clear();
             vec![]
         }
-        // A checkout/create/delete finished: report it, then reload so the list can't drift.
+        // A create/delete finished: report it, then reload so the list can't drift.
         Event::BranchMutated { label, result } => {
             state.status = Some(match result {
                 Ok(()) => label,
@@ -38,6 +39,19 @@ pub fn update_branch(state: &mut BranchState, event: Event) -> Vec<Effect> {
             });
             vec![Effect::LoadBranches]
         }
+        // A checkout finished. On success we quit immediately (git-native), leaving the
+        // "Checked out <branch>" line as the exit report; on failure we stay and show the error.
+        Event::BranchCheckedOut { branch, result } => match result {
+            Ok(()) => {
+                state.status = Some(format!("Checked out {branch}"));
+                state.should_quit = true;
+                vec![Effect::Quit]
+            }
+            Err(e) => {
+                state.status = Some(format!("Checkout failed: {e}"));
+                vec![]
+            }
+        },
         // A copy/PR action finished; report its outcome (no reload — it didn't change the list).
         Event::ActionFinished { label, result } => {
             state.status = Some(match result {
@@ -533,19 +547,54 @@ mod tests {
         assert_eq!(effects, vec![Effect::CheckoutBranch("wip-parser".into())]);
     }
 
-    // BR-06: a finished mutation reloads the branch list.
+    // BR-09/10: a finished create/delete reloads the branch list.
     #[test]
     fn br_06_mutation_reloads_list() {
         let mut s = app();
         let effects = update_branch(
             &mut s,
             Event::BranchMutated {
-                label: "Checked out".into(),
+                label: "Deleted branch".into(),
                 result: Ok(()),
             },
         );
         assert_eq!(effects, vec![Effect::LoadBranches]);
-        assert_eq!(s.status.as_deref(), Some("Checked out"));
+        assert_eq!(s.status.as_deref(), Some("Deleted branch"));
+    }
+
+    // BR-06: a successful checkout quits gitt immediately, leaving a git-native exit report.
+    #[test]
+    fn br_06_checkout_quits_on_success() {
+        let mut s = app();
+        let effects = update_branch(
+            &mut s,
+            Event::BranchCheckedOut {
+                branch: "wip-parser".into(),
+                result: Ok(()),
+            },
+        );
+        assert!(s.should_quit);
+        assert_eq!(effects, vec![Effect::Quit]);
+        assert_eq!(s.status.as_deref(), Some("Checked out wip-parser"));
+    }
+
+    // BR-06: a failed checkout keeps the screen open and reports the error (no quit, no reload).
+    #[test]
+    fn br_06_checkout_stays_on_failure() {
+        let mut s = app();
+        let effects = update_branch(
+            &mut s,
+            Event::BranchCheckedOut {
+                branch: "wip-parser".into(),
+                result: Err("local changes would be overwritten".into()),
+            },
+        );
+        assert!(!s.should_quit);
+        assert!(effects.is_empty());
+        assert_eq!(
+            s.status.as_deref(),
+            Some("Checkout failed: local changes would be overwritten")
+        );
     }
 
     // BR-07: Open PR emits an OpenPr effect carrying the branch name.

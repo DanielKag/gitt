@@ -26,7 +26,7 @@ the cache distinctly from commit summaries so the two never collide.
 | BR-03  | Pressing `/` enters search mode; typing filters the branches with the same exact substring-per-term (smart-case) matcher as `gitt log`, over the branch name, upstream, and tip subject; `Esc` keeps the filter. | unit, e2e  |
 | BR-04  | Vim motions move the selection: `j`/`k`, `g`/`G`, `Ctrl-d`/`Ctrl-u`, `Ctrl-f`/`Ctrl-b`. Selection never leaves bounds. | unit       |
 | BR-05  | `Enter` opens an action menu for the selected branch with: Checkout, Open PR, Copy name, Delete branch. `Esc` closes it. | unit, e2e  |
-| BR-06  | "Checkout" checks out the selected branch; afterwards the repo `HEAD` is on that branch and the list's current-branch marker follows it. | unit, e2e  |
+| BR-06  | "Checkout" checks out the selected branch. On a **successful** checkout (git exits 0) `gitt` **quits immediately** — like a native `git checkout` — leaving the `Checked out <branch>` line as its exit report, with `HEAD` now on that branch. A **failed** checkout keeps the screen open and shows the error on the status line. | unit, e2e  |
 | BR-07  | "Open PR" invokes `gh` for the selected branch (the branch name reaches the PR opener).                            | unit, e2e  |
 | BR-08  | "Copy name" copies the selected branch name to the clipboard.                                                      | unit, e2e  |
 | BR-09  | "Delete branch" is gated by the shared confirmation overlay; `y`/`Enter` deletes and the list reloads, `n`/`Esc` cancels. Deleting the **current** branch is refused with a friendly status (git can't delete the checked-out branch). | unit, e2e  |

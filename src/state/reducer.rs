@@ -116,6 +116,7 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
         | Event::BranchesLoaded(_)
         | Event::BranchesFailed(_)
         | Event::BranchMutated { .. }
+        | Event::BranchCheckedOut { .. }
         | Event::PrStatusesLoaded(_)
         | Event::PrStatusesFailed(_) => vec![],
     }

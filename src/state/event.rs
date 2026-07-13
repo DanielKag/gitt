@@ -62,9 +62,15 @@ pub enum Event {
     BranchesLoaded(Vec<Branch>),
     /// The local branch list failed to load.
     BranchesFailed(String),
-    /// A branch mutation (checkout/create/delete) finished; the branch view reloads afterward.
+    /// A branch mutation (create/delete) finished; the branch view reloads afterward.
     BranchMutated {
         label: String,
+        result: Result<(), String>,
+    },
+    /// A checkout finished. On success `gitt branch` quits immediately (like a native `git checkout`);
+    /// on failure the screen stays open and reports the error (BR-06).
+    BranchCheckedOut {
+        branch: String,
         result: Result<(), String>,
     },
     /// The per-branch PR statuses finished loading (fills the PR column).

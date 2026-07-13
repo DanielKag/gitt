@@ -198,7 +198,14 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
         }
         Effect::CheckoutBranch(name) => {
             let git = ports.git.clone();
-            branch_mutation(tx, "Checked out", move || git.checkout(&name));
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let result = git.checkout(&name).map_err(|e| e.to_string());
+                let _ = tx.send(Event::BranchCheckedOut {
+                    branch: name,
+                    result,
+                });
+            });
         }
         Effect::CreateBranch(name) => {
             let git = ports.git.clone();
