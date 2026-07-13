@@ -80,7 +80,9 @@ fn on_key_list(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
     let page = state.viewport_rows().max(1) as isize;
 
     match key.code {
-        KeyCode::Char('q') => quit(state),
+        // Esc from the base list quits; Menu/Confirm handle their own Esc first, so repeated Esc is
+        // always the way out (consistent across every gitt screen).
+        KeyCode::Char('q') | KeyCode::Esc => quit(state),
         KeyCode::Char('j') | KeyCode::Down => move_by(state, 1),
         KeyCode::Char('k') | KeyCode::Up => move_by(state, -1),
         KeyCode::Char('g') => set_cursor(state, 0),
@@ -558,6 +560,24 @@ mod tests {
         let mut s = app();
         let effects = update_status(&mut s, ch('R'));
         assert_eq!(effects, vec![Effect::LoadStatus]);
+    }
+
+    // Esc from the base list quits; from the Menu/Confirm it dismisses that first (then Esc quits).
+    #[test]
+    fn esc_is_the_universal_exit() {
+        let mut s = app();
+        let effects = update_status(&mut s, key(KeyCode::Esc));
+        assert!(s.should_quit);
+        assert_eq!(effects, vec![Effect::Quit]);
+
+        // Confirm → List (not quit) on Esc.
+        let mut s = app();
+        update_status(&mut s, ch('d')); // open discard confirm
+        assert_eq!(s.mode, StatusMode::Confirm);
+        let effects = update_status(&mut s, key(KeyCode::Esc));
+        assert_eq!(s.mode, StatusMode::List, "first Esc cancels the confirm");
+        assert!(!s.should_quit);
+        assert_eq!(effects, vec![]);
     }
 
     // STAT-13: q and Ctrl-c quit.

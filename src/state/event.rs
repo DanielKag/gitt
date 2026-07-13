@@ -46,6 +46,10 @@ pub enum Event {
     SummaryLoaded { hash: String, text: String },
     /// A cache lookup found no summary for this commit; the user can generate one.
     SummaryMissing { hash: String },
+    /// A background bulk cache prefetch finished, carrying the (key, summary) pairs that were found
+    /// on disk. Used to light up the AI marker for every already-summarized entry at once, without
+    /// clobbering any state the user has since changed.
+    SummariesPrefetched(Vec<(String, String)>),
     /// A streamed token of an in-flight generation; appended to the commit's partial summary.
     SummaryChunk { hash: String, delta: String },
     /// A freshly generated summary (authoritative: overwrites any prior state for the commit).

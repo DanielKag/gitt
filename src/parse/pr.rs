@@ -38,7 +38,10 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrStatus> {
 /// Map one PR's `state`/`isDraft` fields to a [`PrStatus`] (`gh` reports `OPEN`/`CLOSED`/`MERGED`).
 fn status_of(entry: &serde_json::Value) -> Option<PrStatus> {
     let state = entry.get("state")?.as_str()?;
-    let is_draft = entry.get("isDraft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_draft = entry
+        .get("isDraft")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     match state.to_ascii_uppercase().as_str() {
         "OPEN" if is_draft => Some(PrStatus::Draft),
         "OPEN" => Some(PrStatus::Open),

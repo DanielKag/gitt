@@ -4,9 +4,9 @@ expression: out
 ---
  feature (HEAD)    origin/main
 Search:   (3 matches)
-aaaaaaa 3 days ago    Ada Lovelace     add fuzzy search (HEAD, feature)
-bbbbbbb 5 days ago    Bo               fix flaky test
-ccccccc 2 weeks ago   Cy               refactor parser (v1.0)
+✦ aaaaaaa 3 days ago    Ada Lovelace     add fuzzy search (HEAD, feature)
+  bbbbbbb 5 days ago    Bo               fix flaky test
+  ccccccc 2 weeks ago   Cy               refactor parser (v1.0)
 
 
 ┌ai summary────────────────────────────────────────────────────────────────────┐

@@ -56,10 +56,12 @@ keys — so the two commands feel like one tool.
 | `Enter` / `y`      | Confirm | Confirm discard                                               |
 | `Esc` / `n`        | Confirm | Cancel discard                                                |
 | `Esc`              | Menu    | Close menu                                                    |
+| `Esc`              | List    | Quit (nothing open to dismiss)                                |
 | `q` / `Ctrl-c`     | any     | Quit                                                          |
 
 _Keys shared verbatim with `gitt log`: `j`/`k`/`g`/`G`/`Ctrl-d`/`u`/`f`/`b` (navigation), `Tab`
-(preview), `R` (reload), `Enter` (action menu), `Esc` (dismiss overlay), `q`/`Ctrl-c` (quit)._
+(preview), `R` (reload), `Enter` (action menu), `Esc` (dismiss the open overlay, or quit from the
+base list), `q`/`Ctrl-c` (quit)._
 
 ## Ports (behind `GitRepo`)
 

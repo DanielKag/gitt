@@ -29,10 +29,12 @@ distinct commits never collide.
 | SUM-04  | Pressing `s` on the selected commit starts generation off the UI thread; the model's tokens **stream** into the panel as they arrive (a "summarizing…" placeholder shows until the first token). All progress/results show in the panel — the status line keeps showing the keymap legend. | unit, e2e  |
 | SUM-05  | The generation prompt is built by a **pure** function from a system instruction + the commit subject + its diff; the diff is truncated to a bounded number of lines. | unit       |
 | SUM-06  | A completed generation shows the model's summary in the panel and writes it to the cache directory under the user's home, keyed by the commit SHA, so a later run reuses it without calling Ollama. | unit, e2e  |
-| SUM-07  | Generation calls Ollama's HTTP API (`POST /api/generate`, streaming) with model `qwen2.5-coder:3b` by default (overridable via `GITT_OLLAMA_MODEL`) at `http://127.0.0.1:11434` (overridable via `OLLAMA_HOST`); the clean `response` text is used (not `ollama run`, whose piped output carries terminal control codes). | unit (model + URL resolution), manual |
+| SUM-07  | Generation calls Ollama's HTTP API (`POST /api/generate`, streaming) with model `qwen3-coder:30b` by default (overridable via `GITT_OLLAMA_MODEL`) at `http://127.0.0.1:11434` (overridable via `OLLAMA_HOST`); the clean `response` text is used (not `ollama run`, whose piped output carries terminal control codes). | unit (model + URL resolution), manual |
 | SUM-08  | A generation failure (Ollama missing or erroring) surfaces in the panel as a failed state without crashing; pressing `s` again retries. | unit, e2e  |
 | SUM-09  | Pressing `s` while a summary is already generating for the selected commit is ignored (no duplicate effect / AI call).  | unit       |
 | SUM-10  | The cache directory resolves as `GITT_CACHE_DIR` → `$XDG_CACHE_HOME/gitt/summaries` → `$HOME/.cache/gitt/summaries`.    | unit       |
+| SUM-11  | A list entry (commit in `gitt log`, branch in `gitt branch`) whose summary is cached (`Ready`) shows a one-character AI marker (`✦`) in a leading column; entries without a cached summary reserve the same width blank so rows stay aligned. | unit       |
+| SUM-12  | Markdown `code` spans (backtick pairs) render styled (backticks stripped) identically in **both** the collapsed teaser and the expanded footer — the teaser is the expanded view cut to fit, not plain text. | unit       |
 
 ## Keybindings / UX
 

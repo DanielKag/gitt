@@ -6,10 +6,10 @@
 
 use std::path::PathBuf;
 
-/// Default Ollama model, overridable via `GITT_OLLAMA_MODEL`. A small code-trained model is the
-/// sweet spot for one-line commit summaries: benchmarked fastest *and* correct (right identifiers,
-/// scopes, backticks) vs larger models, whose extra quality isn't worth the latency.
-pub const DEFAULT_MODEL: &str = "qwen2.5-coder:3b";
+/// Default Ollama model, overridable via `GITT_OLLAMA_MODEL`. A 30B code-trained model gives
+/// noticeably sharper summaries (right identifiers, scopes, backticks, less hallucination) than the
+/// small models; on the target machines it is still fast enough for the on-demand `s` flow.
+pub const DEFAULT_MODEL: &str = "qwen3-coder:30b";
 
 /// Default Ollama server, overridable via `OLLAMA_HOST` (ollama's own convention).
 pub const DEFAULT_OLLAMA_HOST: &str = "http://127.0.0.1:11434";
@@ -167,6 +167,8 @@ mod tests {
     // SUM-07: model resolution prefers the env value, falls back to the default.
     #[test]
     fn sum_07_model_resolution() {
+        // The default is the 30B code model (upgraded from the small 3B for better summaries).
+        assert_eq!(DEFAULT_MODEL, "qwen3-coder:30b");
         assert_eq!(ollama_model(None), DEFAULT_MODEL);
         assert_eq!(ollama_model(Some("  ".into())), DEFAULT_MODEL);
         assert_eq!(ollama_model(Some("qwen2.5-coder".into())), "qwen2.5-coder");

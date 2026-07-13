@@ -59,11 +59,12 @@ between scopes is instant.
 | `Enter`            | List    | Open the per-file action menu                                 |
 | `j`/`k`, `Enter`   | Menu    | Navigate / confirm action                                     |
 | `Esc`              | Menu    | Close menu                                                    |
+| `Esc`              | List    | Quit (nothing open to dismiss)                                |
 | `q` / `Ctrl-c`     | any     | Quit                                                          |
 
 _Keys shared verbatim with `gitt log`/`gitt status`: `j`/`k`/`g`/`G`/`Ctrl-d`/`u`/`f`/`b`
 (navigation), `←`/`→` (switch view/scope, as in `gitt log`), `Tab` (preview), `R` (reload), `Enter`
-(action menu), `Esc` (dismiss overlay), `q`/`Ctrl-c` (quit)._
+(action menu), `Esc` (dismiss the open overlay, or quit from the base list), `q`/`Ctrl-c` (quit)._
 
 ## Ports (behind `GitRepo`)
 

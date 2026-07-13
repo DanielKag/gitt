@@ -7,13 +7,14 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
 
-use super::components::{self, overlay_menu, preview_pane, truncate};
+use super::components::{self, dim_area, overlay_menu, preview_pane, truncate};
 use super::theme;
 use crate::domain::StatusEntry;
 use crate::state::{FilePreview, StatusLoad, StatusMode, StatusState};
 
 /// Render the whole status UI for the current state.
 pub fn draw_status(frame: &mut Frame, state: &StatusState) {
+    let area = frame.area();
     let chunks = Layout::new(
         Direction::Vertical,
         [
@@ -22,12 +23,16 @@ pub fn draw_status(frame: &mut Frame, state: &StatusState) {
             Constraint::Length(1), // status / help
         ],
     )
-    .split(frame.area());
+    .split(area);
 
     render_header(frame, chunks[0], state);
     render_body(frame, chunks[1], state);
     render_status(frame, chunks[2], state);
 
+    match state.mode {
+        StatusMode::Menu | StatusMode::Confirm => dim_area(frame, area),
+        StatusMode::List => {}
+    }
     match state.mode {
         StatusMode::Menu => render_menu(frame, chunks[1], state),
         StatusMode::Confirm => render_confirm(frame, chunks[1], state),

@@ -32,6 +32,17 @@ pub trait Screen {
     fn should_quit(&self) -> bool;
     /// The effect(s) to kick off once, at startup (e.g. the initial load).
     fn init_effects(&mut self) -> Vec<Effect>;
+    /// Fixed height (rows) of a small inline window to run in, or `None` for fullscreen. Most screens
+    /// take the whole terminal; `gitt branch` opts into a compact inline picker.
+    fn viewport_height(&self) -> Option<u16> {
+        None
+    }
+    /// A one-line summary of what happened, printed to the terminal as the inline screen exits (so an
+    /// interactive command leaves a git-native trace, e.g. "Checked out wip-parser"). `None` prints
+    /// nothing (a clean prompt). Only consulted for inline screens.
+    fn exit_report(&self) -> Option<String> {
+        None
+    }
 }
 
 impl Screen for AppState {
@@ -96,15 +107,32 @@ impl Screen for BranchState {
         // Fetch the branch list and the PR statuses in parallel; neither blocks the first paint.
         vec![Effect::LoadBranches, Effect::LoadPrStatuses]
     }
+    fn viewport_height(&self) -> Option<u16> {
+        // The branch switcher runs as a small inline window rather than taking over the terminal.
+        Some(BRANCH_VIEWPORT_ROWS)
+    }
+    fn exit_report(&self) -> Option<String> {
+        // Leave a git-native trace of the last action (checkout/create/delete/…), if any.
+        self.status.clone()
+    }
 }
+
+/// Height of the small inline window `gitt branch` runs in.
+const BRANCH_VIEWPORT_ROWS: u16 = 20;
 
 /// Drive any [`Screen`] to completion: terminal setup, the event loop, and effect dispatch.
 pub fn run<S: Screen>(mut screen: S, ports: Ports) -> Result<()> {
-    let mut guard = TerminalGuard::enter()?;
+    let inline_height = screen.viewport_height();
+    let mut guard = match inline_height {
+        Some(h) => TerminalGuard::enter_inline(h)?,
+        None => TerminalGuard::enter()?,
+    };
     let (tx, rx) = mpsc::channel::<Event>();
 
     if let Ok((w, h)) = crossterm::terminal::size() {
-        // Uniform path: seed the initial size through the reducer like any other event.
+        // Uniform path: seed the initial size through the reducer like any other event. In an inline
+        // window the drawable area is only the viewport height, so clamp to it.
+        let h = inline_height.map_or(h, |vh| vh.min(h));
         let _ = screen.update(Event::Resize(w, h));
     }
 
@@ -116,11 +144,17 @@ pub fn run<S: Screen>(mut screen: S, ports: Ports) -> Result<()> {
 
     guard.terminal.draw(|f| screen.draw(f))?;
 
+    // In an inline window, a resize must be clamped to the viewport height (the drawable area).
+    let clamp = |ev: Event| match (ev, inline_height) {
+        (Event::Resize(w, h), Some(vh)) => Event::Resize(w, vh.min(h)),
+        (ev, _) => ev,
+    };
+
     while let Ok(event) = rx.recv() {
-        let mut effects = screen.update(event);
+        let mut effects = screen.update(clamp(event));
         // Coalesce any already-queued events into this frame.
         while let Ok(ev) = rx.try_recv() {
-            effects.extend(screen.update(ev));
+            effects.extend(screen.update(clamp(ev)));
         }
         for effect in effects {
             workers::dispatch(effect, &ports, &tx);
@@ -130,6 +164,10 @@ pub fn run<S: Screen>(mut screen: S, ports: Ports) -> Result<()> {
             break;
         }
     }
+
+    // Leave a clean, git-native footprint for an inline screen (erase the UI, print a one-line
+    // report, drop to a fresh prompt). Fullscreen screens restore themselves via the alternate screen.
+    guard.finish_inline(screen.exit_report())?;
 
     Ok(())
 }

@@ -87,7 +87,9 @@ fn on_key_list(state: &mut DiffState, key: KeyEvent) -> Vec<Effect> {
     let page = state.viewport_rows().max(1) as isize;
 
     match key.code {
-        KeyCode::Char('q') => quit(state),
+        // Esc from the base list quits; the Menu handles its own Esc first, so repeated Esc is always
+        // the way out (consistent across every gitt screen).
+        KeyCode::Char('q') | KeyCode::Esc => quit(state),
         KeyCode::Char('j') | KeyCode::Down => move_by(state, 1),
         KeyCode::Char('k') | KeyCode::Up => move_by(state, -1),
         KeyCode::Char('g') => set_cursor(state, 0),
@@ -498,6 +500,23 @@ mod tests {
         );
         assert_eq!(s.cursor, 0);
         assert_eq!(s.selected_path().as_deref(), Some("only.rs"));
+    }
+
+    // Esc from the base list quits; from the Menu it closes the menu first (then a later Esc quits).
+    #[test]
+    fn esc_is_the_universal_exit() {
+        let mut s = app();
+        let effects = update_diff(&mut s, key(KeyCode::Esc));
+        assert!(s.should_quit);
+        assert_eq!(effects, vec![Effect::Quit]);
+
+        let mut s = app();
+        update_diff(&mut s, key(KeyCode::Enter)); // open menu
+        assert_eq!(s.mode, DiffMode::Menu);
+        let effects = update_diff(&mut s, key(KeyCode::Esc));
+        assert_eq!(s.mode, DiffMode::List, "first Esc closes the menu");
+        assert!(!s.should_quit);
+        assert_eq!(effects, vec![]);
     }
 
     // DIFF-12: q and Ctrl-c quit.

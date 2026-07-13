@@ -70,6 +70,17 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
             state.summaries.entry(hash).or_insert(SummaryState::Missing);
             vec![]
         }
+        Event::SummariesPrefetched(hits) => {
+            // Light up the AI marker for every summarized commit; never clobber a state the user has
+            // since moved on to (generating/ready/failed) — `or_insert` only fills empty slots.
+            for (hash, text) in hits {
+                state
+                    .summaries
+                    .entry(hash)
+                    .or_insert(SummaryState::Ready(text));
+            }
+            vec![]
+        }
         // A streamed token: append to the partial summary, but only while still generating (ignore
         // late chunks that arrive after the state moved on).
         Event::SummaryChunk { hash, delta } => {
@@ -129,7 +140,9 @@ fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let page = state.viewport_rows().max(1) as isize;
 
     match key.code {
-        KeyCode::Char('q') => quit(state),
+        // Esc from the base list quits (nothing is open to dismiss); with an overlay/search open it
+        // closes that first, so repeated Esc is always the way out — the same everywhere in gitt.
+        KeyCode::Char('q') | KeyCode::Esc => quit(state),
         KeyCode::Char('j') | KeyCode::Down => move_by(state, 1),
         KeyCode::Char('k') | KeyCode::Up => move_by(state, -1),
         KeyCode::Char('g') => set_cursor(state, 0),
@@ -289,6 +302,9 @@ fn on_log_batch(
     };
 
     let batch_len = commits.len();
+    // Keys to prefetch from the summary cache so this batch's AI markers appear without waiting for
+    // the user to select each commit (captured before the commits are moved into the view).
+    let batch_hashes: Vec<String> = commits.iter().map(|c| c.hash.clone()).collect();
     // The first page (skip == 0) replaces any prior contents; later pages append.
     let mut all = if skip == 0 {
         Vec::new()
@@ -352,6 +368,10 @@ fn on_log_batch(
             limit: page_limit(state, total),
             epoch,
         });
+    }
+    // Prefetch this batch's cached summaries in the background so their AI markers show right away.
+    if !batch_hashes.is_empty() {
+        effects.push(Effect::PrefetchSummaries(batch_hashes));
     }
     effects
 }
@@ -1228,7 +1248,14 @@ mod tests {
             },
         );
         let hash = s.selected_hash().unwrap();
-        assert_eq!(effects, vec![Effect::LoadSummary { hash: hash.clone() }]);
+        // The selection's summary is looked up, and the batch is prefetched for its AI markers.
+        assert_eq!(
+            effects,
+            vec![
+                Effect::LoadSummary { hash: hash.clone() },
+                Effect::PrefetchSummaries(vec![hash.clone()]),
+            ]
+        );
 
         update(&mut s, Event::SummaryMissing { hash: hash.clone() });
         assert_eq!(s.summaries.get(&hash), Some(&SummaryState::Missing));
@@ -1237,6 +1264,50 @@ mod tests {
         drive(&mut s, vec![ch('j')]); // only one commit → no move, but exercise the path
         let effects = request_summary(&s);
         assert_eq!(effects, vec![], "known commit is not re-requested");
+    }
+
+    // A loaded batch also kicks off a background prefetch of its summaries, and the prefetch result
+    // fills the AI marker for cached commits without clobbering a generation already in flight.
+    #[test]
+    fn prefetch_fills_cached_summaries_without_clobbering() {
+        let mut s = AppState::new("feature".into(), "main".into(), None);
+        s.size = (80, 24);
+        start_log_load(&mut s, View::LocalHead);
+        let effects = update(
+            &mut s,
+            Event::LogBatch {
+                view: View::LocalHead,
+                skip: 0,
+                epoch: 1,
+                commits: vec![commit("aaaaaaa", "first"), commit("bbbbbbb", "second")],
+            },
+        );
+        let a = format!("aaaaaaa{}", "0".repeat(33));
+        let b = format!("bbbbbbb{}", "0".repeat(33));
+        assert!(
+            effects.contains(&Effect::PrefetchSummaries(vec![a.clone(), b.clone()])),
+            "the batch is prefetched: {effects:?}"
+        );
+
+        // A generation is already in flight for the second commit; the prefetch must not overwrite it.
+        s.summaries
+            .insert(b.clone(), SummaryState::Generating("partial".into()));
+        update(
+            &mut s,
+            Event::SummariesPrefetched(vec![
+                (a.clone(), "Cached A.".into()),
+                (b.clone(), "Cached B (stale).".into()),
+            ]),
+        );
+        assert_eq!(
+            s.summaries.get(&a),
+            Some(&SummaryState::Ready("Cached A.".into()))
+        );
+        assert_eq!(
+            s.summaries.get(&b),
+            Some(&SummaryState::Generating("partial".into())),
+            "prefetch never clobbers an in-flight generation"
+        );
     }
 
     // SUM-02: a cache hit (SummaryLoaded) shows the summary immediately (Ready), no generation.
@@ -1443,7 +1514,7 @@ mod tests {
     }
 
     // `S` toggles the expanded summary footer in place — the screen stays in List mode so navigation
-    // still works — and `Esc` does NOT collapse it.
+    // still works — and only `S` minimizes it (Esc is reserved for the universal quit/close path).
     #[test]
     fn sum_s_toggles_expanded_footer() {
         let mut s = app();
@@ -1452,13 +1523,33 @@ mod tests {
         assert!(s.summary_expanded);
         assert_eq!(s.mode, Mode::List, "still in List mode → navigation works");
 
-        // Esc must not collapse it.
-        update(&mut s, key(KeyCode::Esc));
-        assert!(s.summary_expanded, "Esc does not minimize");
-
         // S again collapses.
         update(&mut s, ch('S'));
         assert!(!s.summary_expanded);
+    }
+
+    // Esc from the base List mode quits (nothing is open to dismiss), like `q`.
+    #[test]
+    fn esc_from_list_quits() {
+        let mut s = app();
+        let effects = update(&mut s, key(KeyCode::Esc));
+        assert!(s.should_quit);
+        assert_eq!(effects, vec![Effect::Quit]);
+    }
+
+    // Esc first closes the open menu (back to List); a second Esc then quits.
+    #[test]
+    fn esc_closes_menu_then_quits() {
+        let mut s = app();
+        update(&mut s, key(KeyCode::Enter)); // open menu
+        assert_eq!(s.mode, Mode::Menu);
+        let effects = update(&mut s, key(KeyCode::Esc));
+        assert_eq!(s.mode, Mode::List, "first Esc closes the menu");
+        assert!(!s.should_quit);
+        assert_eq!(effects, vec![]);
+        let effects = update(&mut s, key(KeyCode::Esc));
+        assert!(s.should_quit, "second Esc quits");
+        assert_eq!(effects, vec![Effect::Quit]);
     }
 
     // Expanding grows the footer for a long summary, shrinking the list viewport; the reducer's

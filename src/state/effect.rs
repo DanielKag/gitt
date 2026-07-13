@@ -28,6 +28,11 @@ pub enum Effect {
     OpenPr(String),
     /// Look up a commit's AI summary in the on-disk cache (cheap; no model call).
     LoadSummary { hash: String },
+    /// Bulk-look-up many summaries in the on-disk cache on one background thread, so the AI marker
+    /// can appear for every already-summarized entry on first paint (not just the selected one). The
+    /// keys are commit SHAs (log) or branch summary keys (branch); cache hits come back in one
+    /// [`crate::state::Event::SummariesPrefetched`]. No model calls, no UI blocking.
+    PrefetchSummaries(Vec<String>),
     /// Generate a commit's AI summary: fetch its diff, prompt the model, cache the result.
     GenerateSummary { hash: String, subject: String },
 

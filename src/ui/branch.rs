@@ -8,17 +8,20 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
 
-use super::components::{self, highlight, overlay_menu, truncate};
+use super::components::{self, ai_badge_span, dim_area, highlight, overlay_menu, truncate};
 use super::{summary, theme};
+use crate::domain::branch::summary_key;
 use crate::domain::{Branch, PrStatus};
 use crate::state::{BranchLoad, BranchMode, BranchState};
 
-const NAME_WIDTH: usize = 20;
-const PR_WIDTH: usize = 6;
+// The subject/commit column is intentionally dropped so the branch name gets room to breathe.
+const NAME_WIDTH: usize = 40;
+const PR_WIDTH: usize = 8;
 const DATE_WIDTH: usize = 12;
 
 /// Render the whole branch UI for the current state.
 pub fn draw_branch(frame: &mut Frame, state: &BranchState) {
+    let area = frame.area();
     let chunks = Layout::new(
         Direction::Vertical,
         [
@@ -28,13 +31,17 @@ pub fn draw_branch(frame: &mut Frame, state: &BranchState) {
             Constraint::Length(1), // status
         ],
     )
-    .split(frame.area());
+    .split(area);
 
     render_header(frame, chunks[0], state);
     render_search(frame, chunks[1], state);
     render_body(frame, chunks[2], state);
     render_status(frame, chunks[3], state);
 
+    match state.mode {
+        BranchMode::Menu | BranchMode::Confirm | BranchMode::Create => dim_area(frame, area),
+        BranchMode::List | BranchMode::Search => {}
+    }
     match state.mode {
         BranchMode::Menu => render_menu(frame, chunks[2], state),
         BranchMode::Confirm => render_confirm(frame, chunks[2], state),
@@ -111,7 +118,17 @@ fn render_list(frame: &mut Frame, area: Rect, state: &BranchState) {
             let idx = state.top + offset;
             let branch = branches.get(m.commit_idx)?;
             let pr = state.pr_status(&branch.name);
-            let mut item = ListItem::new(branch_line(branch, &state.filter, pr, pr_loaded));
+            let summarized = matches!(
+                state.summaries.get(&summary_key(&branch.tip)),
+                Some(crate::state::SummaryState::Ready(_))
+            );
+            let mut item = ListItem::new(branch_line(
+                branch,
+                &state.filter,
+                pr,
+                pr_loaded,
+                summarized,
+            ));
             if idx == state.cursor {
                 item = item.style(theme::selected());
             }
@@ -122,10 +139,18 @@ fn render_list(frame: &mut Frame, area: Rect, state: &BranchState) {
     frame.render_widget(List::new(items), area);
 }
 
-/// Build one branch's display line: `<marker> name  pr  date  subject`. The current branch is marked
-/// with `*` and its name styled distinctly; search matches are highlighted in the name and subject;
-/// the PR column shows the branch's pull-request state (blank until the statuses have loaded).
-fn branch_line(b: &Branch, query: &str, pr: Option<PrStatus>, pr_loaded: bool) -> Line<'static> {
+/// Build one branch's display line: `<marker><ai> name  pr  date`. The current branch is marked with
+/// `*` and its name styled distinctly; the `<ai>` column carries the one-char AI-summary marker when
+/// this branch's summary is cached; search matches are highlighted in the name; the PR column shows
+/// the branch's pull-request state (`loading…` until the background `gh` fetch lands). The commit
+/// subject is intentionally omitted so the name has room.
+fn branch_line(
+    b: &Branch,
+    query: &str,
+    pr: Option<PrStatus>,
+    pr_loaded: bool,
+    summarized: bool,
+) -> Line<'static> {
     let marker = if b.is_current { "* " } else { "  " };
     let name_base = if b.is_current {
         theme::current_branch()
@@ -134,7 +159,11 @@ fn branch_line(b: &Branch, query: &str, pr: Option<PrStatus>, pr_loaded: bool) -
     };
     let name = format!("{:<w$}", truncate(&b.name, NAME_WIDTH), w = NAME_WIDTH);
 
-    let mut spans = vec![Span::styled(marker.to_string(), theme::current_branch())];
+    let mut spans = vec![
+        Span::styled(marker.to_string(), theme::current_branch()),
+        ai_badge_span(summarized),
+        Span::raw(" "),
+    ];
     spans.extend(highlight(&name, query, name_base));
     spans.push(Span::raw(" "));
     spans.push(pr_span(pr, pr_loaded));
@@ -143,16 +172,14 @@ fn branch_line(b: &Branch, query: &str, pr: Option<PrStatus>, pr_loaded: bool) -
         format!("{:<w$}", truncate(&b.relative, DATE_WIDTH), w = DATE_WIDTH),
         theme::date(),
     ));
-    spans.push(Span::raw(" "));
-    spans.extend(highlight(&b.subject, query, theme::subject()));
     Line::from(spans)
 }
 
-/// The PR-column span (fixed [`PR_WIDTH`]): blank while the statuses are still loading, a dim `—` for a
-/// branch with no PR, or the coloured PR state otherwise.
+/// The PR-column span (fixed [`PR_WIDTH`]): a dim `loading…` until the background fetch lands, a dim
+/// `—` for a branch with no PR, or the coloured PR state otherwise.
 fn pr_span(pr: Option<PrStatus>, pr_loaded: bool) -> Span<'static> {
     let (text, style) = match (pr_loaded, pr) {
-        (false, _) => (String::new(), theme::dim()),
+        (false, _) => ("loading…".to_string(), theme::dim()),
         (true, None) => ("—".to_string(), theme::dim()),
         (true, Some(status)) => (status.label().to_string(), theme::pr_status(status)),
     };
@@ -264,11 +291,38 @@ mod tests {
         s
     }
 
-    // BR-01: list renders marker / name / date / subject; the current branch is marked.
+    // BR-01: list renders marker / name / date (no commit-subject column); the current branch is
+    // marked and the name column is spaced out.
     #[test]
     fn br_01_list_snapshot() {
         let s = app();
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // BR-17: before the PR statuses load, the column reads "loading…" rather than sitting blank.
+    #[test]
+    fn br_17_pr_column_loading() {
+        let s = app(); // pr_statuses is None until the background fetch lands
+        let out = render_to_string(&s, 80, 12);
+        assert!(
+            out.contains("loading…"),
+            "PR column shows a loading hint:\n{out}"
+        );
+    }
+
+    // A branch whose summary is cached carries the one-char AI marker; others don't.
+    #[test]
+    fn ai_badge_marks_summarized_branch() {
+        let mut s = app();
+        let key = s.selected_summary_key().unwrap();
+        s.summaries
+            .insert(key, SummaryState::Ready("Reworks the parser.".into()));
+        let out = render_to_string(&s, 80, 12);
+        assert_eq!(
+            out.matches('✦').count(),
+            1,
+            "exactly the summarized branch is marked:\n{out}"
+        );
     }
 
     // BR-17: once PR statuses load, the column shows each branch's state (coloured); a branch with no
@@ -361,6 +415,36 @@ mod tests {
         s.size = (80, 8);
         s.load = BranchLoad::Loading;
         insta::assert_snapshot!(render_to_string(&s, 80, 8));
+    }
+
+    // An open overlay dims the base screen behind it so the modal stands out; the plain list doesn't.
+    #[test]
+    fn menu_dims_the_background() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Modifier;
+
+        let dimmed_at = |mode: BranchMode| {
+            let mut s = app();
+            s.mode = mode;
+            if mode == BranchMode::Menu {
+                s.menu = Some(BranchMenu {
+                    items: BranchAction::all(),
+                    cursor: 0,
+                    name: "wip-parser".into(),
+                    is_current: false,
+                });
+            }
+            let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+            term.draw(|f| draw_branch(f, &s)).unwrap();
+            // A header cell is always outside the centered overlay, so it reflects the dim layer.
+            term.backend().buffer()[(0, 0)]
+                .modifier
+                .contains(Modifier::DIM)
+        };
+
+        assert!(dimmed_at(BranchMode::Menu), "menu dims the background");
+        assert!(!dimmed_at(BranchMode::List), "the plain list is not dimmed");
     }
 
     // Selected row is reversed, consistent with the log/status/diff lists.

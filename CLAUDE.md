@@ -43,12 +43,22 @@ learns `gitt log` already knows `gitt status`. New features **reuse**, never re-
   same list renderer.
 - **Keybindings are a shared vocabulary.** A key means the same thing everywhere: `j`/`k`/`g`/`G`/
   `Ctrl-d`/`u`/`f`/`b` navigate, `Tab` toggles preview, `Enter` opens the action menu, `Esc` dismisses
-  an overlay, `R` reloads, `/` searches, `q`/`Ctrl-c` quit. Don't repurpose a key for something a user
+  the open overlay/search and quits from the base list (so repeated `Esc` is always the way out),
+  `R` reloads, `/` searches, `q`/`Ctrl-c` quit. Don't repurpose a key for something a user
   wouldn't expect from its meaning in another screen; if a screen adds a key, prefer one that's free
   everywhere.
 - **Interaction patterns match.** Destructive actions are always gated by the same confirmation
   overlay; long/expensive work runs off the UI thread as an `Effect` and reports via the status line;
   the view reflects real state after a mutation rather than optimistically guessing.
+- **Clean, git-native footprint.** Every command must leave the terminal exactly as a native git
+  command would: run, do its thing, report what happened, and return the cursor to a fresh prompt on
+  the next line — **never** a lingering blank block, half-erased UI, or a scrambled prompt. A
+  fullscreen screen uses the alternate screen (so it restores the pre-launch terminal on exit, leaving
+  no trace). A **small inline screen** (`Viewport::Inline`, e.g. `gitt branch`) must, on exit, erase
+  its own drawing from the viewport's top row down, print a one-line report of the last action (the
+  `Screen::exit_report`), and drop to a new line for the shell prompt — see
+  `runtime::terminal::TerminalGuard::finish_inline`. If you add an interactive command, verify this on
+  the **real binary** (an alt-screen leftover or an inline blank block is a bug), not just in tests.
 
 When you add a screen, the diff should be mostly new *behavior* (reducer + a thin port), not new
 *chrome*. If you find yourself writing a second color palette, a second list widget, or a second

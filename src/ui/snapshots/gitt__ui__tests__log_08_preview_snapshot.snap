@@ -4,9 +4,9 @@ expression: "render_to_string(&s, 80, 12)"
 ---
  feature (HEAD)    origin/main
 Search:   (3 matches)
-aaaaaaa 3 days ago    Ada Lovelace     a┌diff──────────────────────────────────┐
-bbbbbbb 5 days ago    Bo               f│commit aaaaaaa                        │
-ccccccc 2 weeks ago   Cy               r│+added line                           │
+  aaaaaaa 3 days ago    Ada Lovelace    ┌diff──────────────────────────────────┐
+  bbbbbbb 5 days ago    Bo              │commit aaaaaaa                        │
+  ccccccc 2 weeks ago   Cy              │+added line                           │
                                         │-removed line                         │
                                         └──────────────────────────────────────┘
 ┌ai summary────────────────────────────────────────────────────────────────────┐

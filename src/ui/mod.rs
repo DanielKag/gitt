@@ -14,13 +14,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
 use crate::domain::{Commit, Ref, View};
-use crate::state::{AppState, Mode, PreviewState};
+use crate::state::{AppState, Mode, PreviewState, SummaryState};
 
 pub use branch::draw_branch;
 pub use diff::draw_diff;
 pub use status::draw_status;
 
-use components::{highlight, overlay_menu, preview_pane, truncate};
+use components::{ai_badge_span, dim_area, highlight, overlay_menu, preview_pane, truncate};
 
 const DATE_WIDTH: usize = 13;
 const AUTHOR_WIDTH: usize = 16;
@@ -145,7 +145,11 @@ fn render_list(frame: &mut Frame, area: Rect, state: &AppState) {
         .filter_map(|(offset, m)| {
             let idx = state.top + offset;
             let commit = commits.get(m.commit_idx)?;
-            let mut item = ListItem::new(commit_line(commit, &state.filter));
+            let summarized = matches!(
+                state.summaries.get(&commit.hash),
+                Some(SummaryState::Ready(_))
+            );
+            let mut item = ListItem::new(commit_line(commit, &state.filter, summarized));
             if idx == state.cursor {
                 item = item.style(theme::selected());
             }
@@ -156,17 +160,19 @@ fn render_list(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(List::new(items), area);
 }
 
-/// Build one commit's display line: `hash  date  author  subject (refs)`. When a search `query` is
-/// active, the substrings it matched are highlighted in the searchable fields (LOG-25); the date is
-/// not searchable, so it's never highlighted.
-fn commit_line(c: &Commit, query: &str) -> Line<'static> {
+/// Build one commit's display line: `<ai> hash  date  author  subject (refs)`. The leading column is
+/// the one-char AI-summary marker (present only when this commit's summary is cached). When a search
+/// `query` is active, the substrings it matched are highlighted in the searchable fields (LOG-25);
+/// the date is not searchable, so it's never highlighted.
+fn commit_line(c: &Commit, query: &str, summarized: bool) -> Line<'static> {
     let author = format!(
         "{:<w$}",
         truncate(&c.author, AUTHOR_WIDTH),
         w = AUTHOR_WIDTH
     );
 
-    let mut spans = highlight(&format!("{:<8}", c.short), query, theme::hash());
+    let mut spans = vec![ai_badge_span(summarized), Span::raw(" ")];
+    spans.extend(highlight(&format!("{:<8}", c.short), query, theme::hash()));
     spans.push(Span::styled(
         format!("{:<w$}", truncate(&c.relative, DATE_WIDTH), w = DATE_WIDTH),
         theme::date(),
@@ -218,6 +224,7 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_menu(frame: &mut Frame, body: Rect, state: &AppState) {
     let Some(menu) = &state.menu else { return };
 
+    dim_area(frame, frame.area());
     let title = format!(" {} {} ", menu.short, truncate(&menu.subject, 30));
     let labels: Vec<&str> = menu.items.iter().map(|a| a.label()).collect();
     overlay_menu(frame, body, &title, &labels, menu.cursor);
@@ -491,6 +498,49 @@ mod tests {
         insta::assert_snapshot!(out);
     }
 
+    // The teaser (collapsed/overflow) path styles `code` spans just like the expanded view — a long
+    // summary whose `code` span sits on the first visible line keeps the code background.
+    #[test]
+    fn sum_teaser_styles_code_spans() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries.insert(
+            hash,
+            SummaryState::Ready(
+                "Bumps `package.json` and then rewrites a great deal of surrounding prose so that \
+                 the summary overflows the collapsed footer and is shown as a cut teaser rather \
+                 than in full."
+                    .into(),
+            ),
+        );
+        // Height forces the collapsed footer into overflow (the teaser path).
+        let out = render_to_string(&s, 80, 12);
+        assert!(
+            out.contains('…'),
+            "the summary overflows into a teaser:\n{out}"
+        );
+
+        let (y, line) = out
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains("package.json"))
+            .map(|(y, l)| (y as u16, l.to_string()))
+            .expect("the code span is on a visible teaser line");
+        let x = line.find("package.json").unwrap() as u16;
+
+        let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        term.draw(|f| draw(f, &s)).unwrap();
+        let buf = term.backend().buffer();
+        assert_eq!(
+            buf[(x, y)].bg,
+            theme::code().bg.unwrap(),
+            "the code span carries the code background in the teaser"
+        );
+    }
+
     // Expanding (S) grows the footer in place to show the full summary; the list stays above it.
     #[test]
     fn sum_summary_expanded_snapshot() {
@@ -605,6 +655,48 @@ mod tests {
             buf[(x - 1, y)].bg,
             hl.bg.unwrap(),
             "non-matched char keeps its normal background"
+        );
+    }
+
+    // A commit whose summary is cached carries the one-char AI marker; a commit that is only
+    // generating/failed/absent does not.
+    #[test]
+    fn ai_badge_marks_summarized_commit() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        s.summaries
+            .insert(hash, SummaryState::Ready("Adds a fuzzy finder.".into()));
+        let out = render_to_string(&s, 80, 12);
+        assert_eq!(
+            out.matches('✦').count(),
+            1,
+            "exactly the summarized commit is marked:\n{out}"
+        );
+    }
+
+    // An open action menu dims the base screen behind it.
+    #[test]
+    fn menu_dims_the_background() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Modifier;
+
+        let mut s = app();
+        s.mode = Mode::Menu;
+        s.menu = Some(crate::state::ActionMenu {
+            items: MenuAction::all(),
+            cursor: 0,
+            hash: "aaaaaaa".into(),
+            short: "aaaaaaa".into(),
+            subject: "add fuzzy search".into(),
+        });
+        let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        term.draw(|f| draw(f, &s)).unwrap();
+        assert!(
+            term.backend().buffer()[(0, 0)]
+                .modifier
+                .contains(Modifier::DIM),
+            "the background behind the menu is dimmed"
         );
     }
 

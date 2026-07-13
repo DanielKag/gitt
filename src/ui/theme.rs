@@ -36,6 +36,11 @@ pub fn code() -> Style {
 pub fn menu_selected() -> Style {
     Style::new().add_modifier(Modifier::REVERSED)
 }
+/// One-character marker shown beside a log commit / branch that already has an AI summary cached.
+/// Magenta + bold so it reads as a distinct "AI" signal and still shows under `NO_COLOR`.
+pub fn ai_badge() -> Style {
+    Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+}
 /// The currently checked-out branch in `gitt branch` (green + bold, like git's own `* branch`).
 pub fn current_branch() -> Style {
     Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)

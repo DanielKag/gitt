@@ -21,7 +21,7 @@ the cache distinctly from commit summaries so the two never collide.
 
 | ID     | Criterion (testable statement)                                                                                     | Tiers      |
 | ------ | ------------------------------------------------------------------------------------------------------------------ | ---------- |
-| BR-01  | Running `gitt branch` renders the local branches (most-recently-committed first), one per line: a current-branch marker, the branch name, the tip commit's relative date, and its subject. The current branch is marked and styled distinctly. | unit, e2e  |
+| BR-01  | Running `gitt branch` renders the local branches (most-recently-committed first), one per line: a current-branch marker, the branch name (given a wide, spaced-out column), the PR-status column, and the tip commit's relative date. The current branch is marked and styled distinctly. There is **no** commit-subject column — the name gets the freed room. | unit, e2e  |
 | BR-02  | The branch list parser turns the pinned `for-each-ref --format` output into `Branch` values (current flag, name, tip SHA, upstream, tip timestamp/subject). | unit       |
 | BR-03  | Pressing `/` enters search mode; typing filters the branches with the same exact substring-per-term (smart-case) matcher as `gitt log`, over the branch name, upstream, and tip subject; `Esc` keeps the filter. | unit, e2e  |
 | BR-04  | Vim motions move the selection: `j`/`k`, `g`/`G`, `Ctrl-d`/`Ctrl-u`, `Ctrl-f`/`Ctrl-b`. Selection never leaves bounds. | unit       |
@@ -37,6 +37,9 @@ the cache distinctly from commit summaries so the two never collide.
 | BR-14  | A branch with no commits ahead of the base short-circuits to a friendly "no changes" summary without calling the model. | unit       |
 | BR-15  | `R` reloads the branch list; `q` / `Ctrl-c` quit cleanly; running outside a git repository prints a clear error and exits non-zero (no TUI). | unit, e2e  |
 | BR-16  | Empty repo / a single branch / no selection make motions and actions safe no-ops (no panic).                      | unit       |
+| BR-17  | A per-branch PR-status column is filled from a single background `gh` fetch (open/draft/merged/closed, coloured), which never blocks the first paint. Until it lands the column reads `loading…`; a branch with no PR shows a dim `—`. | unit, e2e  |
+| BR-18  | `gitt branch` opens in a small **inline window** (a fixed 20-row viewport in the current terminal) rather than taking over the whole screen, leaving the surrounding scrollback intact. On exit it leaves a git-native footprint: the UI is erased, the last action is printed as a one-line report, and the shell prompt resumes on the next line (no lingering blank block). | unit, e2e  |
+| BR-19  | A branch whose AI summary is cached shows a one-character AI marker (`✦`) in a leading column; branches without a cached summary show a blank of the same width so rows stay aligned. Shared with `gitt log`. | unit       |
 
 ## Keybindings / UX
 
@@ -51,6 +54,7 @@ the cache distinctly from commit summaries so the two never collide.
 | `<char>`          | Search      | Append to filter                              |
 | `Backspace`       | Search      | Delete last filter char                       |
 | `Esc`             | Search      | Leave search (keep filter)                    |
+| `Esc`             | List        | Quit (nothing open to dismiss)                |
 | `n`               | List        | Create a new branch (opens the name input)    |
 | `d`               | List        | Delete the selected branch (opens confirm)    |
 | `s`               | List        | Generate (or regenerate) the branch's AI summary |
@@ -62,6 +66,9 @@ the cache distinctly from commit summaries so the two never collide.
 | `y`/`Enter`,`n`/`Esc` | Confirm | Confirm / cancel the deletion                 |
 | `<char>`,`Enter`,`Esc` | Create | Type the name / create / cancel               |
 | `q` / `Ctrl-c`    | any         | Quit                                          |
+
+`Esc` is the universal exit: it dismisses whatever overlay/search is open, and quits from the base
+list — so pressing `Esc` repeatedly always walks you out (alongside `q`).
 
 The layout mirrors `gitt log` exactly: header · search bar · branch list · AI-summary footer · status
 line. The summary footer states are identical to `gitt log`'s (hint / generating / streaming / ready /
@@ -75,8 +82,8 @@ failed), and `S` expands it in place.
 - The PR-status column is populated by a single `gh pr list --author @me` call, scoped to the current
   user's PRs. This keeps it correct and fast in a busy monorepo (an unscoped newest-N list is drowned
   out by unrelated org/bot PRs and never reaches your local branches). A branch whose PR was opened by
-  someone else therefore shows no status (blank/`—`); a non-GitHub repo or missing `gh` leaves the
-  column blank too.
+  someone else therefore shows no status (`—`); a non-GitHub repo or missing `gh` leaves the column
+  at `—` too. While the fetch is still in flight the column reads `loading…`.
 - Deleting the current branch → refused with a status message (git itself can't).
 - `gh` / `ollama` missing → the affected action degrades gracefully (status message / failed panel), no
   crash.

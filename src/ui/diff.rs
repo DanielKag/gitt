@@ -7,13 +7,14 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
-use super::components::{overlay_menu, preview_pane, truncate};
+use super::components::{dim_area, overlay_menu, preview_pane, truncate};
 use super::theme;
 use crate::domain::{DiffFile, DiffScope};
 use crate::state::{DiffLoad, DiffMode, DiffPreview, DiffState};
 
 /// Render the whole diff UI for the current state.
 pub fn draw_diff(frame: &mut Frame, state: &DiffState) {
+    let area = frame.area();
     let chunks = Layout::new(
         Direction::Vertical,
         [
@@ -22,13 +23,14 @@ pub fn draw_diff(frame: &mut Frame, state: &DiffState) {
             Constraint::Length(1), // status / help
         ],
     )
-    .split(frame.area());
+    .split(area);
 
     render_header(frame, chunks[0], state);
     render_body(frame, chunks[1], state);
     render_status(frame, chunks[2], state);
 
     if state.mode == DiffMode::Menu {
+        dim_area(frame, area);
         render_menu(frame, chunks[1], state);
     }
 }

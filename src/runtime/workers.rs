@@ -84,6 +84,21 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
                 let _ = tx.send(ev);
             });
         }
+        Effect::PrefetchSummaries(keys) => {
+            // One background thread reads all the keys from the on-disk cache and reports the hits in
+            // a single event, so first paint can show the AI marker on every summarized entry.
+            let cache = ports.summary_cache.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let hits: Vec<(String, String)> = keys
+                    .into_iter()
+                    .filter_map(|key| cache.get(&key).map(|text| (key, text)))
+                    .collect();
+                if !hits.is_empty() {
+                    let _ = tx.send(Event::SummariesPrefetched(hits));
+                }
+            });
+        }
         Effect::GenerateSummary { hash, subject } => {
             let git = ports.git.clone();
             let summarizer = ports.summarizer.clone();

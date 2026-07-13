@@ -11,6 +11,7 @@ use super::branch::{BranchAction, BranchLoad, BranchMenu, BranchMode, BranchStat
 use super::effect::Effect;
 use super::event::Event;
 use super::model::SummaryState;
+use crate::domain::branch::summary_key;
 use crate::domain::summary::strip_preamble;
 
 /// Fold an event into the branch-screen state, returning the side effects the shell must perform.
@@ -57,6 +58,17 @@ pub fn update_branch(state: &mut BranchState, event: Event) -> Vec<Effect> {
             state.summaries.entry(hash).or_insert(SummaryState::Missing);
             vec![]
         }
+        // A background bulk prefetch landed: light up the AI marker for every summarized branch,
+        // without clobbering any state the user has since moved on to (generating/ready/failed).
+        Event::SummariesPrefetched(hits) => {
+            for (hash, text) in hits {
+                state
+                    .summaries
+                    .entry(hash)
+                    .or_insert(SummaryState::Ready(strip_preamble(&text)));
+            }
+            vec![]
+        }
         Event::SummaryChunk { hash, delta } => {
             if let Some(SummaryState::Generating(buf)) = state.summaries.get_mut(&hash) {
                 buf.push_str(&delta);
@@ -100,7 +112,18 @@ fn on_branches_loaded(
         state.cursor = idx;
         state.clamp_scroll();
     }
-    on_selection_changed(state)
+    let mut effects = on_selection_changed(state);
+    // Prefetch every branch's cached summary in the background so their AI markers appear on first
+    // paint, not only once the user navigates onto each one.
+    let keys: Vec<String> = state
+        .branches()
+        .iter()
+        .map(|b| summary_key(&b.tip))
+        .collect();
+    if !keys.is_empty() {
+        effects.push(Effect::PrefetchSummaries(keys));
+    }
+    effects
 }
 
 /// The index into `matches` of the branch with `name`, if it's currently visible.
@@ -133,7 +156,9 @@ fn on_key_list(state: &mut BranchState, key: KeyEvent) -> Vec<Effect> {
     let page = state.viewport_rows().max(1) as isize;
 
     match key.code {
-        KeyCode::Char('q') => quit(state),
+        // Esc from the base list quits; Search/Menu/Confirm/Create handle their own Esc first, so
+        // repeated Esc is always the way out (consistent across every gitt screen).
+        KeyCode::Char('q') | KeyCode::Esc => quit(state),
         KeyCode::Char('j') | KeyCode::Down => move_by(state, 1),
         KeyCode::Char('k') | KeyCode::Up => move_by(state, -1),
         KeyCode::Char('g') => set_cursor(state, 0),
@@ -646,11 +671,15 @@ mod tests {
             s.selected_summary_key().as_deref(),
             Some(expected_key.as_str())
         );
+        // The selection's summary is looked up, and every branch is prefetched for its AI marker.
         assert_eq!(
             effects,
-            vec![Effect::LoadSummary {
-                hash: expected_key.clone()
-            }]
+            vec![
+                Effect::LoadSummary {
+                    hash: expected_key.clone()
+                },
+                Effect::PrefetchSummaries(vec![expected_key.clone()]),
+            ]
         );
 
         update_branch(
@@ -783,6 +812,38 @@ mod tests {
         let effects = update_branch(&mut s2, ctrl('c'));
         assert!(s2.should_quit);
         assert_eq!(effects, vec![Effect::Quit]);
+    }
+
+    // Esc from the base list quits; from Search it first returns to List, then a second Esc quits;
+    // from the Menu it closes the menu first. Repeated Esc is always the way out.
+    #[test]
+    fn esc_is_the_universal_exit() {
+        // Base list → quit.
+        let mut s = app();
+        let effects = update_branch(&mut s, key(KeyCode::Esc));
+        assert!(s.should_quit);
+        assert_eq!(effects, vec![Effect::Quit]);
+
+        // Search → List (not quit), then Esc quits.
+        let mut s = app();
+        update_branch(&mut s, ch('/'));
+        assert_eq!(s.mode, BranchMode::Search);
+        let effects = update_branch(&mut s, key(KeyCode::Esc));
+        assert_eq!(s.mode, BranchMode::List);
+        assert!(!s.should_quit);
+        assert_eq!(effects, vec![]);
+        let effects = update_branch(&mut s, key(KeyCode::Esc));
+        assert!(s.should_quit);
+        assert_eq!(effects, vec![Effect::Quit]);
+
+        // Menu → List (not quit) on Esc.
+        let mut s = app();
+        update_branch(&mut s, key(KeyCode::Enter));
+        assert_eq!(s.mode, BranchMode::Menu);
+        let effects = update_branch(&mut s, key(KeyCode::Esc));
+        assert_eq!(s.mode, BranchMode::List);
+        assert!(!s.should_quit);
+        assert_eq!(effects, vec![]);
     }
 
     // BR-16: an empty list makes motions and actions safe no-ops.

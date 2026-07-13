@@ -5,10 +5,24 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::text::{Span, Text};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Wrap};
 
 use super::theme;
+
+/// The one-character AI-summary marker shown beside an entry whose summary is cached (log & branch).
+pub const AI_BADGE: &str = "✦";
+
+/// The one-column AI-summary marker span for a list row: the [`AI_BADGE`] glyph when `summarized`,
+/// otherwise a blank of the same width so rows stay aligned. Shared by the log and branch lists.
+pub fn ai_badge_span(summarized: bool) -> Span<'static> {
+    if summarized {
+        Span::styled(AI_BADGE, theme::ai_badge())
+    } else {
+        Span::raw(" ")
+    }
+}
 
 /// A centered rectangle of at most `width`×`height` within `area`.
 pub fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
@@ -17,6 +31,18 @@ pub fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     Rect::new(x, y, w, h)
+}
+
+/// Dim every cell in `area` (used to darken the base screen behind a modal overlay so the overlay
+/// stands out). Applied before the overlay's own `Clear`, which resets the modal's own cells back to
+/// full brightness. Shared by every screen so modals feel the same everywhere.
+pub fn dim_area(frame: &mut Frame, area: Rect) {
+    let buf = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buf[(x, y)].modifier.insert(Modifier::DIM);
+        }
+    }
 }
 
 /// Render a centered, bordered action menu over `body`: one item per line, the item at `cursor`

@@ -19,8 +19,8 @@ fn br_01_15_lists_branches_and_quits() {
 
     tui.wait_for("wip-parser");
     tui.wait_for("bugfix");
-    // The current branch (main) is marked with `*`.
-    tui.wait_for("* main");
+    // The current branch (main) is marked with `*` (a blank AI-summary column sits between them).
+    tui.wait_for("*   main");
 
     tui.send_str("q");
     tui.wait_exit();
@@ -145,7 +145,7 @@ fn br_09_delete_removes_branch() {
 fn br_09_cannot_delete_current() {
     let repo = TempRepo::with_branches();
     let mut tui = spawn(repo.path());
-    tui.wait_for("* main");
+    tui.wait_for("*   main");
 
     // main is the current branch and sorts last; jump to the bottom to select it.
     tui.send_str("G");
@@ -282,6 +282,50 @@ fn br_17_pr_status_column() {
     tui.wait_for("merged");
 
     tui.send_str("q");
+    tui.wait_exit();
+}
+
+// The inline window leaves a git-native footprint on exit: the branch-list chrome is erased and a
+// one-line report of the last action persists (rather than a lingering 20-row blank block).
+#[test]
+fn clean_footprint_on_exit_with_report() {
+    let repo = TempRepo::with_branches();
+    let mut tui = spawn(repo.path());
+    tui.wait_for("wip-parser");
+
+    // Do an action so there's something to report, then quit.
+    tui.send_str("/");
+    tui.send_str("wip");
+    tui.wait_for("wip-parser");
+    tui.enter(); // leave search
+    tui.enter(); // open menu
+    tui.wait_for("Checkout");
+    tui.enter(); // Checkout
+    tui.wait_for("Checked out");
+
+    tui.send_str("q");
+    tui.wait_exit();
+
+    // After exit the UI chrome is gone and the action is reported on a persistent line.
+    let screen = tui.screen();
+    assert!(
+        screen.contains("Checked out"),
+        "exit reports what happened:\n{screen}"
+    );
+    assert!(
+        !screen.contains("ai summary") && !screen.contains("/search"),
+        "the branch-list chrome is erased on exit:\n{screen}"
+    );
+}
+
+// Esc from the base list quits the TUI (the universal exit path), like `q`.
+#[test]
+fn esc_quits_from_list() {
+    let repo = TempRepo::with_branches();
+    let mut tui = spawn(repo.path());
+    tui.wait_for("wip-parser");
+
+    tui.esc();
     tui.wait_exit();
 }
 

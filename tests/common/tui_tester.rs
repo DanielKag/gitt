@@ -22,7 +22,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Tui {
     _pair: PtyPair,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     parser: Arc<Mutex<vt100::Parser>>,
     child: Box<dyn Child + Send + Sync>,
     _home: TempDir,
@@ -80,17 +80,32 @@ impl Tui {
 
         let child = pair.slave.spawn_command(cmd).unwrap();
         let mut reader = pair.master.try_clone_reader().unwrap();
-        let writer = pair.master.take_writer().unwrap();
+        let writer: Arc<Mutex<Box<dyn Write + Send>>> =
+            Arc::new(Mutex::new(pair.master.take_writer().unwrap()));
 
         let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
         {
             let parser = parser.clone();
+            let writer = writer.clone();
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
-                        Ok(n) => parser.lock().unwrap().process(&buf[..n]),
+                        Ok(n) => {
+                            let chunk = &buf[..n];
+                            parser.lock().unwrap().process(chunk);
+                            // Answer a Device Status Report (cursor position) query, `ESC[6n`, with
+                            // the current cursor position — a real terminal always does. Inline
+                            // viewports (e.g. `gitt branch`) block on this handshake at startup.
+                            if chunk.windows(4).any(|w| w == b"\x1b[6n") {
+                                let (row, col) = parser.lock().unwrap().screen().cursor_position();
+                                let resp = format!("\x1b[{};{}R", row + 1, col + 1);
+                                let mut w = writer.lock().unwrap();
+                                let _ = w.write_all(resp.as_bytes());
+                                let _ = w.flush();
+                            }
+                        }
                     }
                 }
             });
@@ -113,8 +128,9 @@ impl Tui {
 
     /// Send raw bytes as keystrokes.
     pub fn send(&mut self, bytes: &[u8]) {
-        self.writer.write_all(bytes).unwrap();
-        self.writer.flush().unwrap();
+        let mut writer = self.writer.lock().unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.flush().unwrap();
     }
 
     pub fn send_str(&mut self, s: &str) {

@@ -44,6 +44,7 @@ dependency on the `fzf` binary.
 | LOG-24 | `--max-count N` caps total commits loaded (`0` = unlimited); the default is unlimited via progressive loading. Batches stop once the cap is reached or history is exhausted. | unit       |
 | LOG-25 | While a filter is active, the substrings that matched are visually highlighted in-place on each shown row (across hash, author, subject, and ref fields), so the user sees *why* a commit matched. | unit       |
 | LOG-26 | `Tab` toggles the diff preview in **search mode** too (not only in list mode), so the user can peek at a diff without leaving the search they're typing. | unit, e2e  |
+| LOG-27 | When an overlay (action menu / confirmation) is open, the base screen behind it is dimmed so the modal stands out. Shared by every screen's overlays (`gitt log`/`status`/`diff`/`branch`). | unit       |
 
 ## Keybindings / UX
 
@@ -59,6 +60,7 @@ dependency on the `fzf` binary.
 | `<char>`        | Search      | Append to filter                              |
 | `Backspace`     | Search      | Delete last filter char                       |
 | `Esc`           | Search/Menu | Leave search (keep filter) / close menu       |
+| `Esc`           | List        | Quit (nothing open to dismiss)                |
 | `Tab`           | List/Search | Toggle diff preview                           |
 | `R`             | List        | Fetch + reload current view (restarts progressive load) |
 | `Enter`         | List        | Open action menu for selected commit          |
