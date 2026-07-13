@@ -16,6 +16,10 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
         Event::Resize(w, h) => {
             state.size = (w, h);
             state.clamp_scroll();
+            // Re-render the pane for the new width so the diff tool re-picks split vs unified.
+            if state.preview_open && state.selected_hash().is_some() {
+                return request_diff(state);
+            }
             vec![]
         }
         Event::LogBatch {
@@ -137,6 +141,7 @@ fn on_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
 
 fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let half = (state.viewport_rows() / 2).max(1) as isize;
     let page = state.viewport_rows().max(1) as isize;
 
@@ -144,6 +149,11 @@ fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         // Esc from the base list quits (nothing is open to dismiss); with an overlay/search open it
         // closes that first, so repeated Esc is always the way out — the same everywhere in gitt.
         KeyCode::Char('q') | KeyCode::Esc => quit(state),
+        // Shift+j/k and Shift+↓/↑ scroll the diff pane (plain keys move the commit selection).
+        KeyCode::Char('J') => scroll_preview(state, 1),
+        KeyCode::Char('K') => scroll_preview(state, -1),
+        KeyCode::Down if shift => scroll_preview(state, 1),
+        KeyCode::Up if shift => scroll_preview(state, -1),
         KeyCode::Char('j') | KeyCode::Down => move_by(state, 1),
         KeyCode::Char('k') | KeyCode::Up => move_by(state, -1),
         KeyCode::Char('g') => set_cursor(state, 0),
@@ -159,6 +169,7 @@ fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             vec![]
         }
         KeyCode::Tab => toggle_preview(state),
+        KeyCode::Char('f') => toggle_expanded(state),
         KeyCode::Char('s') => summarize_selected(state),
         KeyCode::Char('S') => {
             state.summary_expanded = !state.summary_expanded;
@@ -437,9 +448,32 @@ fn toggle_preview(state: &mut AppState) -> Vec<Effect> {
     if state.preview_open {
         request_diff(state)
     } else {
+        state.expanded = false;
         state.preview = PreviewState::Idle;
         vec![]
     }
+}
+
+/// Toggle the expanded diff pane (`f`): the diff grows to 90% of the height (the commit list shrinks
+/// to 10% but stays visible). A no-op when the pane is closed. The pane always spans the full width,
+/// so the diff-tool layout is unchanged (no reload).
+fn toggle_expanded(state: &mut AppState) -> Vec<Effect> {
+    if !state.preview_open {
+        return vec![];
+    }
+    state.expanded = !state.expanded;
+    state.preview_scroll = state.preview_scroll.min(state.max_preview_scroll());
+    vec![]
+}
+
+/// Scroll the diff pane by `delta` lines (Shift+j/k, Shift+↓/↑), clamped to the content.
+fn scroll_preview(state: &mut AppState, delta: i32) -> Vec<Effect> {
+    if !matches!(state.preview, PreviewState::Ready { .. }) {
+        return vec![];
+    }
+    let max = state.max_preview_scroll() as i32;
+    state.preview_scroll = (state.preview_scroll as i32 + delta).clamp(0, max) as u16;
+    vec![]
 }
 
 /// Ask the shell to load the diff for the current selection into the preview.
@@ -447,7 +481,9 @@ fn request_diff(state: &mut AppState) -> Vec<Effect> {
     match state.selected_hash() {
         Some(hash) => {
             state.preview = PreviewState::Loading(hash.clone());
-            vec![Effect::LoadDiff(hash)]
+            state.preview_scroll = 0; // a fresh diff starts at the top
+            let width = state.preview_width();
+            vec![Effect::LoadDiff { hash, width }]
         }
         None => {
             state.preview = PreviewState::Idle;
@@ -559,7 +595,13 @@ fn execute_menu(state: &mut AppState) -> Vec<Effect> {
         },
         MenuAction::OpenPr => {
             state.status = Some("Opening PR…".to_string());
-            vec![Effect::OpenPr(hash)]
+            // `gh pr view <sha>` can't resolve a commit to its PR. GitHub's squash-merge names the
+            // commit `subject (#N)`, so prefer that PR number when present; otherwise fall back to
+            // the hash (best effort).
+            let target = url::pr_number_from_subject(&menu.subject)
+                .map(|n| n.to_string())
+                .unwrap_or(hash);
+            vec![Effect::OpenPr(target)]
         }
         MenuAction::CopySha => {
             state.status = Some("Copied SHA to clipboard".to_string());
@@ -1006,7 +1048,7 @@ mod tests {
         assert!(s.preview_open, "Tab opens the preview in search mode");
         assert_eq!(s.mode, Mode::Search, "still typing a search");
         assert!(
-            effects.iter().any(|e| matches!(e, Effect::LoadDiff(_))),
+            effects.iter().any(|e| matches!(e, Effect::LoadDiff { .. })),
             "opening the preview requests the selected commit's diff"
         );
 
@@ -1072,13 +1114,56 @@ mod tests {
         let effects = update(&mut s, key(KeyCode::Tab));
         assert!(s.preview_open);
         let sel = s.selected_hash().unwrap();
-        assert_eq!(effects, vec![Effect::LoadDiff(sel.clone())]);
+        let width = s.preview_width();
+        assert_eq!(
+            effects,
+            vec![Effect::LoadDiff {
+                hash: sel.clone(),
+                width
+            }]
+        );
         assert_eq!(s.preview, PreviewState::Loading(sel));
         // Toggle off.
         let effects = update(&mut s, key(KeyCode::Tab));
         assert!(!s.preview_open);
         assert_eq!(effects, vec![]);
         assert_eq!(s.preview, PreviewState::Idle);
+    }
+
+    // Diff-pane parity with `gitt diff`: `f` expands the pane height (no reload, width unchanged),
+    // and Shift+j/k / Shift+↓ scroll a ready diff, clamped.
+    #[test]
+    fn preview_expand_and_scroll() {
+        let mut s = app();
+        s.size = (80, 24);
+        update(&mut s, key(KeyCode::Tab)); // open preview
+        assert!(s.preview_open);
+
+        let width = s.preview_width();
+        let effects = update(&mut s, ch('f'));
+        assert!(s.expanded, "f expands the pane");
+        assert_eq!(effects, vec![], "no reload — full-width in both states");
+        assert_eq!(s.preview_width(), width);
+        update(&mut s, ch('f'));
+        assert!(!s.expanded);
+
+        // Scroll a diff taller than the pane.
+        let body: String = (0..300).map(|i| format!("l{i}\n")).collect();
+        s.preview = PreviewState::Ready {
+            hash: s.selected_hash().unwrap(),
+            text: body,
+        };
+        update(&mut s, ch('J'));
+        assert_eq!(s.preview_scroll, 1);
+        update(&mut s, ch('K'));
+        update(&mut s, ch('K'));
+        assert_eq!(s.preview_scroll, 0, "clamped at the top");
+        let shift_down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        for _ in 0..1000 {
+            update(&mut s, shift_down.clone());
+        }
+        assert_eq!(s.preview_scroll, s.max_preview_scroll());
+        assert!(s.preview_scroll > 0);
     }
 
     #[test]
@@ -1191,7 +1276,8 @@ mod tests {
         );
     }
 
-    // LOG-15: Open PR emits an OpenPr effect.
+    // LOG-15: Open PR emits an OpenPr effect. With no `(#N)` in the subject it falls back to the
+    // commit hash (gh can't resolve it, but there's nothing better to try).
     #[test]
     fn log_15_open_pr_effect() {
         let mut s = app();
@@ -1201,6 +1287,26 @@ mod tests {
         assert_eq!(s.menu.as_ref().unwrap().selected(), MenuAction::OpenPr);
         let effects = update(&mut s, key(KeyCode::Enter));
         assert_eq!(effects, vec![Effect::OpenPr(full)]);
+    }
+
+    // LOG-15: `gh pr view <sha>` can't resolve a commit to its PR, so when the subject carries a
+    // `(#N)` reference (GitHub's squash-merge convention) Open PR targets that PR number instead.
+    #[test]
+    fn log_15_open_pr_uses_pr_number_from_subject() {
+        let mut s = app();
+        s.logs.insert(
+            View::LocalHead,
+            Load::Loaded(vec![commit(
+                "ca47b73",
+                "fix(auto-panels): load SDK CSS (#43439)",
+            )]),
+        );
+        s.recompute_matches();
+        update(&mut s, key(KeyCode::Enter));
+        drive(&mut s, vec![ch('j')]); // OpenPr
+        assert_eq!(s.menu.as_ref().unwrap().selected(), MenuAction::OpenPr);
+        let effects = update(&mut s, key(KeyCode::Enter));
+        assert_eq!(effects, vec![Effect::OpenPr("43439".to_string())]);
     }
 
     // LOG-16: Copy revert command copies "git revert <hash>".

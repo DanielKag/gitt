@@ -1,6 +1,5 @@
 ---
 source: src/ui/diff.rs
-assertion_line: 285
 expression: "render_to_string(&s, 80, 8)"
 ---
  Unstaged   Staged   Working   vs main
@@ -10,4 +9,4 @@ Loading…
 
 
 
-j/k move · ←/→ scope · Tab diff · Enter actions · R reload · q quit
+j/k move · ←/→ scope · Tab diff · f wide · Enter actions · R reload · q quit

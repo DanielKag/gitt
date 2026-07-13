@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{Browser, Clipboard, Clock, Env, GitError, PrOpener, Summarizer, SummaryCache};
+use crate::domain::DiffTool;
 use crate::domain::PrStatus;
 use crate::domain::summary::{ollama_generate_url, ollama_model, resolve_cache_dir};
 use crate::parse::parse_pr_list;
@@ -38,12 +39,30 @@ impl Env for RealEnv {
     fn var(&self, key: &str) -> Option<String> {
         std::env::var(key).ok()
     }
+}
 
-    fn has_delta(&self) -> bool {
-        if std::env::var_os("GITT_NO_DELTA").is_some() {
-            return false;
+/// Resolve which diff renderer to use for previews. Precedence: an explicit choice (`--diff-tool`
+/// flag or the `GITT_DIFF_TOOL` env var) wins; otherwise auto-detect the first tool installed on
+/// `PATH` (native single-binary tools first). A chosen-but-missing tool, or nothing installed,
+/// resolves to [`DiffTool::None`] (plain text) — never an error. `GITT_DIFF_TOOL=none` forces plain
+/// (used by e2e for determinism, since CI has none of the tools installed).
+pub fn resolve_diff_tool(explicit: Option<&str>) -> DiffTool {
+    let choice = explicit
+        .map(str::to_string)
+        .or_else(|| std::env::var("GITT_DIFF_TOOL").ok());
+    match choice {
+        Some(name) => {
+            let tool = DiffTool::parse(&name);
+            // A configured tool that isn't installed degrades to plain rather than showing errors.
+            match tool.binary() {
+                Some(bin) if !which(bin) => DiffTool::None,
+                _ => tool,
+            }
         }
-        which("delta")
+        None => DiffTool::AUTODETECT_ORDER
+            .into_iter()
+            .find(|t| t.binary().is_some_and(which))
+            .unwrap_or(DiffTool::None),
     }
 }
 
@@ -92,12 +111,30 @@ impl Browser for RealBrowser {
 pub struct RealPr;
 
 impl PrOpener for RealPr {
-    fn open_pr(&self, hash: &str) -> Result<(), GitError> {
-        if let Some(result) = write_sink("pr.txt", hash) {
+    fn open_pr(&self, target: &str) -> Result<(), GitError> {
+        if let Some(result) = write_sink("pr.txt", target) {
             return result;
         }
-        // Best-effort: ask gh to open the PR associated with this commit in the browser.
-        run("gh", &["pr", "view", hash, "--web"])
+        // `target` is a PR number (log, from the subject's `(#N)`), a branch name (branch screen),
+        // or a commit hash fallback. Capture gh's stderr so a failure reports *why* (e.g. "no pull
+        // requests found") on the status line, instead of a bare "gh exited with 1".
+        let output = Command::new("gh")
+            .args(["pr", "view", target, "--web"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| GitError::Io(format!("gh: {e}")))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(GitError::Io(if stderr.is_empty() {
+                "gh could not open the PR".to_string()
+            } else {
+                stderr
+            }))
+        }
     }
 
     fn statuses(&self) -> Result<HashMap<String, PrStatus>, GitError> {

@@ -35,11 +35,11 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
                 let _ = tx.send(ev);
             });
         }
-        Effect::LoadDiff(hash) => {
+        Effect::LoadDiff { hash, width } => {
             let git = ports.git.clone();
             let tx = tx.clone();
             thread::spawn(move || {
-                let ev = match git.show(&hash, ColorMode::Never, false) {
+                let ev = match git.render_commit_diff(&hash, width) {
                     Ok(text) => Event::DiffLoaded { hash, text },
                     Err(e) => Event::DiffFailed {
                         hash,
@@ -119,11 +119,11 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
                 let _ = tx.send(ev);
             });
         }
-        Effect::LoadFileDiff { path, kind } => {
+        Effect::LoadFileDiff { path, kind, width } => {
             let git = ports.git.clone();
             let tx = tx.clone();
             thread::spawn(move || {
-                let ev = match git.file_diff(&path, kind) {
+                let ev = match git.render_file_diff(&path, kind, width) {
                     Ok(text) => Event::FileDiffLoaded { path, text },
                     Err(e) => Event::FileDiffFailed {
                         path,
@@ -159,11 +159,11 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
                 let _ = tx.send(ev);
             });
         }
-        Effect::LoadDiffText { scope, path } => {
+        Effect::LoadDiffText { scope, path, width } => {
             let git = ports.git.clone();
             let tx = tx.clone();
             thread::spawn(move || {
-                let ev = match git.diff_scope_file(scope, &path) {
+                let ev = match git.render_scope_diff(scope, &path, width) {
                     Ok(text) => Event::DiffTextLoaded { scope, path, text },
                     Err(e) => Event::DiffTextFailed {
                         scope,

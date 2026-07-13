@@ -19,6 +19,10 @@ pub fn update_status(state: &mut StatusState, event: Event) -> Vec<Effect> {
         Event::Resize(w, h) => {
             state.size = (w, h);
             state.clamp_scroll();
+            // Re-render the pane for the new width so the diff tool re-picks split vs unified.
+            if state.preview_open && state.selected().is_some() {
+                return request_diff(state);
+            }
             vec![]
         }
         Event::StatusLoaded(entries) => {
@@ -76,6 +80,7 @@ fn on_key(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
 
 fn on_key_list(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let half = (state.viewport_rows() / 2).max(1) as isize;
     let page = state.viewport_rows().max(1) as isize;
 
@@ -83,6 +88,11 @@ fn on_key_list(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
         // Esc from the base list quits; Menu/Confirm handle their own Esc first, so repeated Esc is
         // always the way out (consistent across every gitt screen).
         KeyCode::Char('q') | KeyCode::Esc => quit(state),
+        // Shift+j/k and Shift+↓/↑ scroll the diff pane (plain keys move the file selection).
+        KeyCode::Char('J') => scroll_preview(state, 1),
+        KeyCode::Char('K') => scroll_preview(state, -1),
+        KeyCode::Down if shift => scroll_preview(state, 1),
+        KeyCode::Up if shift => scroll_preview(state, -1),
         KeyCode::Char('j') | KeyCode::Down => move_by(state, 1),
         KeyCode::Char('k') | KeyCode::Up => move_by(state, -1),
         KeyCode::Char('g') => set_cursor(state, 0),
@@ -92,6 +102,7 @@ fn on_key_list(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('f') if ctrl => move_by(state, page),
         KeyCode::Char('b') if ctrl => move_by(state, -page),
         KeyCode::Tab => toggle_preview(state),
+        KeyCode::Char('f') => toggle_expanded(state),
         KeyCode::Char('R') => reload(state),
         KeyCode::Char(' ') => toggle_stage(state),
         KeyCode::Char('s') => stage_selected(state),
@@ -174,6 +185,7 @@ fn toggle_preview(state: &mut StatusState) -> Vec<Effect> {
     if state.preview_open {
         request_diff(state)
     } else {
+        state.expanded = false;
         state.preview = FilePreview::Idle;
         vec![]
     }
@@ -186,13 +198,37 @@ fn request_diff(state: &mut StatusState) -> Vec<Effect> {
             let path = entry.path.clone();
             let kind = entry.diff_kind();
             state.preview = FilePreview::Loading(path.clone());
-            vec![Effect::LoadFileDiff { path, kind }]
+            state.preview_scroll = 0; // a fresh diff starts at the top
+            let width = state.preview_width();
+            vec![Effect::LoadFileDiff { path, kind, width }]
         }
         None => {
             state.preview = FilePreview::Idle;
             vec![]
         }
     }
+}
+
+/// Toggle the expanded diff pane (`f`): the diff grows to 90% of the height (the file list shrinks
+/// to 10% but stays visible). A no-op when the pane is closed. The pane always spans the full width,
+/// so the diff-tool layout is unchanged (no reload).
+fn toggle_expanded(state: &mut StatusState) -> Vec<Effect> {
+    if !state.preview_open {
+        return vec![];
+    }
+    state.expanded = !state.expanded;
+    state.preview_scroll = state.preview_scroll.min(state.max_preview_scroll());
+    vec![]
+}
+
+/// Scroll the diff pane by `delta` lines (Shift+j/k, Shift+↓/↑), clamped to the content.
+fn scroll_preview(state: &mut StatusState, delta: i32) -> Vec<Effect> {
+    if !matches!(state.preview, FilePreview::Ready { .. }) {
+        return vec![];
+    }
+    let max = state.max_preview_scroll() as i32;
+    state.preview_scroll = (state.preview_scroll as i32 + delta).clamp(0, max) as u16;
+    vec![]
 }
 
 /// `Space`: stage a file with worktree/untracked changes, otherwise unstage it.
@@ -408,6 +444,7 @@ mod tests {
             vec![Effect::LoadFileDiff {
                 path: "tracked.txt".into(),
                 kind: crate::domain::DiffKind::Worktree,
+                width: 78,
             }]
         );
         assert!(s.preview_open);
@@ -429,6 +466,7 @@ mod tests {
             vec![Effect::LoadFileDiff {
                 path: "untracked.txt".into(),
                 kind: crate::domain::DiffKind::Untracked,
+                width: 78,
             }]
         );
     }
@@ -616,7 +654,44 @@ mod tests {
             vec![Effect::LoadFileDiff {
                 path: "tracked.txt".into(),
                 kind: crate::domain::DiffKind::Worktree,
+                width: 78,
             }]
         );
+    }
+
+    // Diff-pane parity with `gitt diff`: `f` expands the pane height (no reload, width unchanged),
+    // and Shift+j/k / Shift+↓ scroll a ready diff, clamped.
+    #[test]
+    fn preview_expand_and_scroll() {
+        let mut s = app();
+        s.size = (80, 24);
+        update_status(&mut s, key(KeyCode::Tab)); // open preview
+        assert!(s.preview_open);
+
+        let width = s.preview_width();
+        let effects = update_status(&mut s, ch('f'));
+        assert!(s.expanded, "f expands the pane");
+        assert_eq!(effects, vec![], "no reload — full-width in both states");
+        assert_eq!(s.preview_width(), width);
+        update_status(&mut s, ch('f'));
+        assert!(!s.expanded);
+
+        // Scroll a diff taller than the pane.
+        let body: String = (0..300).map(|i| format!("l{i}\n")).collect();
+        s.preview = FilePreview::Ready {
+            path: "tracked.txt".into(),
+            text: body,
+        };
+        update_status(&mut s, ch('J'));
+        assert_eq!(s.preview_scroll, 1);
+        update_status(&mut s, ch('K'));
+        update_status(&mut s, ch('K'));
+        assert_eq!(s.preview_scroll, 0, "clamped at the top");
+        let shift_down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        for _ in 0..1000 {
+            update_status(&mut s, shift_down.clone());
+        }
+        assert_eq!(s.preview_scroll, s.max_preview_scroll());
+        assert!(s.preview_scroll > 0);
     }
 }

@@ -94,10 +94,13 @@ fn log_08_preview_toggle() {
     tui.wait_for("local only change");
 
     tui.tab();
-    tui.wait_for("diff"); // the preview block title
+    tui.wait_for("diff"); // the preview block title (a pane below the list)
+    // Expand the diff to 90% height so the git-show output has room in the 24-row test terminal.
+    tui.send_str("f");
     // git show output for the top commit includes the touched file.
     tui.wait_for("file.txt");
 
+    tui.send_str("f"); // restore the split
     tui.tab();
     tui.wait_until_gone("diff");
 
@@ -298,8 +301,10 @@ fn log_26_tab_previews_in_search_mode() {
     tui.wait_for("local only change");
 
     tui.tab(); // toggle the preview while still typing a search
-    tui.wait_for("diff"); // preview pane title
-    tui.wait_for("file.txt"); // git show output for the selected commit
+    tui.wait_for("diff"); // preview pane title (below the list)
+    // In search mode `f` can't expand (it types into the filter), so the diff pane stays at 50%;
+    // assert on the git-show header line, which is at the very top of the pane and always visible.
+    tui.wait_for("commit"); // git show output for the selected commit
 
     // Still in search mode: further keystrokes keep editing the filter (0 matches now).
     tui.send_str("zzz");

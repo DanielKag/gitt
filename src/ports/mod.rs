@@ -79,8 +79,25 @@ pub trait GitRepo: Send + Sync {
     // --- gitt diff ---------------------------------------------------------------------------------
     /// The changed files for a diff scope (parsed `git diff --name-status -z <scope-args>`).
     fn diff_files(&self, scope: DiffScope) -> Result<Vec<DiffFile>, GitError>;
-    /// The plain-text diff of one file for a scope (`git diff <scope-args> -- <path>`).
+    /// The plain-text diff of one file for a scope (`git diff <scope-args> -- <path>`). Used by the
+    /// "Copy diff" action, which must yield plain text, never ANSI.
     fn diff_scope_file(&self, scope: DiffScope, path: &str) -> Result<String, GitError>;
+
+    // --- rendered previews (colorized through the configured diff tool) ---------------------------
+    // These render for *display*: the output may carry ANSI color from the third-party tool
+    // (`domain::diff_tool`), sized to `width` columns so the tool can pick split vs unified. All three
+    // fall back to plain unified text when no tool is configured/installed, so a preview never fails.
+    /// A scope file's diff, rendered for the `gitt diff` pane.
+    fn render_scope_diff(
+        &self,
+        scope: DiffScope,
+        path: &str,
+        width: u16,
+    ) -> Result<String, GitError>;
+    /// A commit's diff (`git show`), rendered for the `gitt log` preview pane.
+    fn render_commit_diff(&self, hash: &str, width: u16) -> Result<String, GitError>;
+    /// A working-tree/staged file's diff, rendered for the `gitt status` preview pane.
+    fn render_file_diff(&self, path: &str, kind: DiffKind, width: u16) -> Result<String, GitError>;
 
     // --- gitt branch -------------------------------------------------------------------------------
     /// The local branches, parsed from `git for-each-ref refs/heads` (most-recently-committed first).
@@ -120,7 +137,6 @@ pub trait PrOpener: Send + Sync {
 
 pub trait Env: Send + Sync {
     fn var(&self, key: &str) -> Option<String>;
-    fn has_delta(&self) -> bool;
 }
 
 /// Streams a commit summary from a built prompt, invoking `on_token` for each chunk as it arrives

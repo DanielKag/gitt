@@ -14,8 +14,9 @@ pub enum Effect {
         limit: usize,
         epoch: u64,
     },
-    /// Load the diff (`git show`) for a commit hash, for the preview pane.
-    LoadDiff(String),
+    /// Load the diff (`git show`) for a commit hash, for the preview pane, rendered into `width`
+    /// columns (so the configured diff tool can pick split vs unified).
+    LoadDiff { hash: String, width: u16 },
     /// `git fetch`, then reload the current view.
     Fetch,
     /// `git checkout <hash>`.
@@ -39,8 +40,12 @@ pub enum Effect {
     // --- gitt status ---------------------------------------------------------------------------
     /// Load (or reload) the working-tree status.
     LoadStatus,
-    /// Load the diff for a file into the preview pane.
-    LoadFileDiff { path: String, kind: DiffKind },
+    /// Load the diff for a file into the preview pane, rendered into `width` columns.
+    LoadFileDiff {
+        path: String,
+        kind: DiffKind,
+        width: u16,
+    },
     /// Stage a file (`git add -- <path>`).
     Stage(String),
     /// Unstage a file (`git restore --staged -- <path>`).
@@ -69,8 +74,12 @@ pub enum Effect {
     // --- gitt diff -----------------------------------------------------------------------------
     /// Load (or reload) the changed-file list for a diff scope.
     LoadDiffFiles(DiffScope),
-    /// Load a file's diff text (for a scope) into the diff pane.
-    LoadDiffText { scope: DiffScope, path: String },
+    /// Load a file's diff text (for a scope) into the diff pane, rendered into `width` columns.
+    LoadDiffText {
+        scope: DiffScope,
+        path: String,
+        width: u16,
+    },
     /// Load a file's diff text (for a scope) and copy it to the clipboard.
     CopyScopeDiff { scope: DiffScope, path: String },
 

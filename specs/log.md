@@ -25,14 +25,14 @@ dependency on the `fzf` binary.
 | LOG-05 | With a filter active, only commits are shown where **every** whitespace-separated term appears as a literal substring (smart-case) of the commit's searchable text (hash, author, subject, refs); matches keep reverse-chronological order. A term is not a fuzzy subsequence — `dankag` matches `daniel kagan` only when typed as `dan kag`, and never matches `daniel nagn`. | unit, e2e  |
 | LOG-06 | Vim motions move the selection: `j`/`k` (down/up), `g`/`G` (top/bottom), `Ctrl-d`/`Ctrl-u` (half page), `Ctrl-f`/`Ctrl-b` (page). Selection never leaves bounds. | unit       |
 | LOG-07 | `→` switches to the `origin/<main>` view and `←` back to the current-branch (HEAD) view; each view's log loads once and is cached. | unit, e2e  |
-| LOG-08 | `Tab` toggles a diff-preview pane showing `git show <hash>` (plain text) for the selected commit; toggling again hides it. | unit, e2e  |
-| ~~LOG-09~~ | ~~Preview uses `delta` when available.~~ Deferred: an in-TUI pane can't render raw ANSI without an ANSI→spans parser; the POC shows plain `git show` text. See Out of scope. | —          |
+| LOG-08 | `Tab` toggles a diff-preview pane showing `git show <hash>` for the selected commit; toggling again hides it. The pane is colorized via the shared configurable diff tool and behaves like `gitt diff`'s: it sits **below** the list (full width), `f` expands it to 90% height, and `Shift+j`/`Shift+k` (`Shift+↓`/`↑`) scroll it. See `specs/diff.md` DIFF-15..19. | unit, e2e  |
+| LOG-09 | Preview is colorized through a configurable third-party diff tool (`difftastic`/`delta`/`git-split-diffs`), converted to styled spans by the shared `ui::ansi` parser; plain `git show` text when no tool is set/installed. Shared with `gitt diff`/`gitt status`. See `specs/diff.md` DIFF-15..17. | unit |
 | LOG-10 | `R` triggers a `git fetch` then reloads the current view (runs off the UI thread; UI stays responsive).          | unit       |
 | LOG-11 | `Enter` opens an action menu for the selected commit with: Open in GitHub, Open PR, Copy SHA, Checkout, Copy revert command. `Esc` closes it. | unit, e2e  |
 | LOG-12 | "Copy SHA" copies the **full** 40-char hash to the clipboard.                                                    | unit, e2e  |
 | LOG-13 | "Checkout" checks out the selected commit; afterwards the repo `HEAD` points at that commit.                     | unit, e2e  |
 | LOG-14 | "Open in GitHub" opens the browser at `https://github.com/<org>/<repo>/commit/<hash>`, normalizing SSH and HTTPS remotes. | unit       |
-| LOG-15 | "Open PR" invokes `gh` for the commit (falling back to a `(#123)` reference parsed from the subject).            | unit       |
+| LOG-15 | "Open PR" opens the commit's PR via `gh pr view … --web`. Since `gh` can't resolve a bare commit SHA to a PR, it targets the `(#N)` number parsed from the subject (GitHub's squash-merge convention) when present, else falls back to the SHA. On failure, `gh`'s own error is surfaced on the status line. | unit       |
 | LOG-16 | "Copy revert command" copies `git revert <hash>` to the clipboard.                                               | unit       |
 | LOG-17 | Main-branch detection resolves in order: `origin/HEAD` symref → local cache file → `git remote show origin`.     | unit       |
 | LOG-18 | `q` / `Ctrl-c` quit the TUI cleanly, restoring the terminal.                                                     | unit, e2e  |
@@ -71,7 +71,7 @@ dependency on the `fzf` binary.
 
 - Not a git repo → clear message on stderr, exit code ≠ 0, no alt-screen.
 - No `origin` remote → GitHub/PR actions report a friendly status; log still works on HEAD view.
-- `gh` / `delta` missing → feature degrades gracefully (skip delta; PR action reports it), no crash.
+- `gh` missing → PR action reports it, no crash. Diff tool missing → preview falls back to plain text.
 - Empty repo (no commits) → renders an empty-state message, not a panic.
 - Very large history (20k–200k commits) → first paint stays instant; background batches fill in the
   rest so search reaches the full history within a moment (LOG-21..24). A batch load failure after
@@ -85,8 +85,8 @@ dependency on the `fzf` binary.
 
 ## Out of scope (for this POC)
 
-- Syntax-highlighted / `delta`-colored diff preview (needs an ANSI→ratatui-spans parser). Preview is
-  plain text for now. `Env::has_delta` plumbing is kept for when this lands.
+- (Delivered) Syntax-highlighted / tool-colored diff preview — now implemented via the shared
+  configurable diff tool + `ui::ansi` (see `specs/diff.md` DIFF-15..17).
 - Fuzzy (subsequence) matching. Search is exact substring-per-term (fzf `'exact` semantics, LOG-05);
   matched substrings are highlighted (LOG-25).
 - Writing operations beyond checkout (rebase/cherry-pick/reset UI). Revert only copies a command.

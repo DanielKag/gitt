@@ -1,9 +1,11 @@
 //! `RealGit`: the `GitRepo` port backed by shelling out to the `git` binary.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::{ColorMode, GitError, GitRepo};
+use crate::domain::diff_tool::{DiffTool, RenderRecipe, Shape};
 use crate::domain::{
     Branch, Commit, DiffFile, DiffKind, DiffScope, StatusEntry, View,
     main_branch::resolve_main_branch,
@@ -19,19 +21,65 @@ pub struct RealGit {
     dir: PathBuf,
     main_branch: String,
     now: i64,
+    /// The third-party renderer diff previews are piped through (or `None` for plain text).
+    diff_tool: DiffTool,
 }
 
 impl RealGit {
-    pub fn new(dir: PathBuf, main_branch: String, now: i64) -> Self {
+    pub fn new(dir: PathBuf, main_branch: String, now: i64, diff_tool: DiffTool) -> Self {
         RealGit {
             dir,
             main_branch,
             now,
+            diff_tool,
         }
     }
 
     fn run(&self, args: &[&str]) -> Result<String, GitError> {
         run_git(&self.dir, args)
+    }
+
+    /// Render a diff into `width` columns via the configured tool. `plain_args` is the `git` argv
+    /// producing plain unified text (fed to a pager tool on stdin, and the universal fallback);
+    /// `ext_args` is the argv for an external-diff engine (run with the recipe's env set). Any tool
+    /// failure degrades to the plain output, so a preview never errors out just because the tool did.
+    fn render_diff(
+        &self,
+        width: u16,
+        plain_args: &[&str],
+        ext_args: &[&str],
+    ) -> Result<String, GitError> {
+        let recipe = self.diff_tool.recipe(width);
+        match recipe.shape {
+            Shape::Plain => self.run(plain_args),
+            Shape::Pager => {
+                // Some pagers (delta) only emit color to a non-TTY pipe when their input is already
+                // colored, so feed them `--color=always` git output; others (git-split-diffs) want
+                // plain input and color it themselves.
+                if recipe.color_input {
+                    let colored: Vec<&str> = plain_args
+                        .iter()
+                        .map(|&a| {
+                            if a == "--no-color" {
+                                "--color=always"
+                            } else {
+                                a
+                            }
+                        })
+                        .collect();
+                    let raw = self.run(&colored)?;
+                    Ok(pipe_through(&self.dir, &recipe, &raw))
+                } else {
+                    let raw = self.run(plain_args)?;
+                    Ok(pipe_through(&self.dir, &recipe, &raw))
+                }
+            }
+            Shape::ExternalDiff => match run_git_env(&self.dir, ext_args, &recipe.env) {
+                Ok(s) if !s.trim().is_empty() => Ok(s),
+                // No output (or the engine failed) → fall back to the plain unified diff.
+                _ => self.run(plain_args),
+            },
+        }
     }
 
     /// The base revision the `Branch` scope diffs against: `origin/<main>` when that ref exists
@@ -160,6 +208,49 @@ impl GitRepo for RealGit {
         self.run(&args)
     }
 
+    fn render_scope_diff(
+        &self,
+        scope: DiffScope,
+        path: &str,
+        width: u16,
+    ) -> Result<String, GitError> {
+        let revs = self.scope_revs(scope);
+        let mut plain: Vec<&str> = vec!["diff", "--no-color"];
+        let mut ext: Vec<&str> = vec!["diff", "--ext-diff"];
+        for r in &revs {
+            plain.push(r);
+            ext.push(r);
+        }
+        plain.extend(["--", path]);
+        ext.extend(["--", path]);
+        self.render_diff(width, &plain, &ext)
+    }
+
+    fn render_commit_diff(&self, hash: &str, width: u16) -> Result<String, GitError> {
+        // Mirror the plain preview's `git show --stat --patch`; the tool colorizes the patch body.
+        let plain = ["show", "--no-color", "--stat", "--patch", hash];
+        let ext = ["show", "--ext-diff", "--stat", "--patch", hash];
+        self.render_diff(width, &plain, &ext)
+    }
+
+    fn render_file_diff(&self, path: &str, kind: DiffKind, width: u16) -> Result<String, GitError> {
+        match kind {
+            // Untracked files have no tracked version to diff against — show their contents as-is
+            // (no tool: there is no diff to colorize).
+            DiffKind::Untracked => self.file_diff(path, kind),
+            DiffKind::Worktree => self.render_diff(
+                width,
+                &["diff", "--no-color", "--", path],
+                &["diff", "--ext-diff", "--", path],
+            ),
+            DiffKind::Staged => self.render_diff(
+                width,
+                &["diff", "--no-color", "--staged", "--", path],
+                &["diff", "--ext-diff", "--staged", "--", path],
+            ),
+        }
+    }
+
     fn branches(&self) -> Result<Vec<Branch>, GitError> {
         let format_arg = format!("--format={BRANCH_FORMAT}");
         let raw = self.run(&[
@@ -213,6 +304,63 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
             code: output.status.code().unwrap_or(-1),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         })
+    }
+}
+
+/// Run `git <args>` in `dir` with extra environment variables set (used for external-diff engines,
+/// which are configured via `GIT_EXTERNAL_DIFF` + tool env), returning stdout on success.
+fn run_git_env(dir: &Path, args: &[&str], env: &[(String, String)]) -> Result<String, GitError> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(dir).args(args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let output = cmd.output().map_err(|e| GitError::Io(e.to_string()))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(GitError::Exit {
+            cmd: format!("git {}", args.join(" ")),
+            code: output.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        })
+    }
+}
+
+/// Pipe `raw` (a plain unified diff) through a pager-style tool (delta / git-split-diffs) and return
+/// its colored stdout. On any failure — tool missing, spawn error, empty output — return `raw`
+/// unchanged so the preview always shows something. Stdin is written on a separate thread so a large
+/// diff can't deadlock against a full stdout pipe.
+fn pipe_through(dir: &Path, recipe: &RenderRecipe, raw: &str) -> String {
+    let mut cmd = Command::new(&recipe.program);
+    cmd.current_dir(dir)
+        .args(&recipe.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (k, v) in &recipe.env {
+        cmd.env(k, v);
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return raw.to_string(),
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let data = raw.to_string();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(data.as_bytes());
+        });
+    }
+    match child.wait_with_output() {
+        Ok(out) => {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if s.trim().is_empty() {
+                raw.to_string()
+            } else {
+                s.into_owned()
+            }
+        }
+        Err(_) => raw.to_string(),
     }
 }
 

@@ -69,21 +69,24 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DiffState) {
 }
 
 fn render_body(frame: &mut Frame, area: Rect, state: &DiffState) {
-    let (list_area, pane_area) = if state.preview_open {
-        let cols = Layout::new(
-            Direction::Horizontal,
-            [Constraint::Percentage(50), Constraint::Percentage(50)],
-        )
-        .split(area);
-        (cols[0], Some(cols[1]))
-    } else {
-        (area, None)
-    };
-
-    render_list(frame, list_area, state);
-    if let Some(pane_area) = pane_area {
-        render_preview(frame, pane_area, state);
+    if !state.preview_open {
+        render_list(frame, area, state);
+        return;
     }
+    // The diff pane sits BELOW the file list (a vertical split), so it spans the full terminal width
+    // — room for a side-by-side layout. `f` grows it from 50% to 90% of the height (list → 10%, but
+    // still visible).
+    let diff_pct = if state.expanded { 90 } else { 50 };
+    let rows = Layout::new(
+        Direction::Vertical,
+        [
+            Constraint::Percentage(100 - diff_pct),
+            Constraint::Percentage(diff_pct),
+        ],
+    )
+    .split(area);
+    render_list(frame, rows[0], state);
+    render_preview(frame, rows[1], state);
 }
 
 fn render_list(frame: &mut Frame, area: Rect, state: &DiffState) {
@@ -152,12 +155,12 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &DiffState) {
         DiffPreview::Ready { text, .. } => text.clone(),
         DiffPreview::Failed { error, .. } => format!("diff failed: {error}"),
     };
-    preview_pane(frame, area, "diff", &text);
+    preview_pane(frame, area, "diff", &text, state.preview_scroll);
 }
 
 fn render_status(frame: &mut Frame, area: Rect, state: &DiffState) {
     let text = state.status.clone().unwrap_or_else(|| {
-        "j/k move · ←/→ scope · Tab diff · Enter actions · R reload · q quit".to_string()
+        "j/k move · ←/→ scope · Tab diff · f wide · Enter actions · R reload · q quit".to_string()
     });
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
@@ -285,6 +288,33 @@ mod tests {
         s.preview_open = false;
         s.loads.insert(DiffScope::Unstaged, DiffLoad::Loading);
         insta::assert_snapshot!(render_to_string(&s, 80, 8));
+    }
+
+    // DIFF-15: a preview carrying ANSI color (from the configured diff tool) renders as styled
+    // spans in the pane — a green added-line escape lands as a green cell.
+    #[test]
+    fn diff_15_preview_ansi_is_colorized() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+
+        let mut s = app();
+        s.preview_open = true;
+        s.cursor = 0;
+        s.preview = DiffPreview::Ready {
+            path: "src/reducer.rs".into(),
+            // ESC[32m … ESC[0m = green foreground, as delta/difft would emit for an added line.
+            text: "\x1b[32m+added line\x1b[0m".into(),
+        };
+        let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        term.draw(|f| draw_diff(f, &s)).unwrap();
+        let buf = term.backend().buffer();
+        let has_green = (0..buf.area.width)
+            .any(|x| (0..buf.area.height).any(|y| buf[(x, y)].fg == Color::Green));
+        assert!(
+            has_green,
+            "an ANSI green diff line should render green in the pane"
+        );
     }
 
     // Selected row is reversed, consistent with the log/status lists.

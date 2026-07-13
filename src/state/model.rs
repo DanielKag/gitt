@@ -146,7 +146,12 @@ pub struct AppState {
     pub top: usize,
     pub mode: Mode,
     pub preview_open: bool,
+    /// When true, the diff pane grows to 90% of the height (the commit list shrinks to 10% but stays
+    /// visible). Toggled with `f`.
+    pub expanded: bool,
     pub preview: PreviewState,
+    /// First visible line of the diff pane content (vertical scroll offset).
+    pub preview_scroll: u16,
     pub menu: Option<ActionMenu>,
     /// AI summaries keyed by commit full SHA (shared across views).
     pub summaries: HashMap<String, SummaryState>,
@@ -177,7 +182,9 @@ impl AppState {
             top: 0,
             mode: Mode::List,
             preview_open: false,
+            expanded: false,
             preview: PreviewState::Idle,
+            preview_scroll: 0,
             menu: None,
             summaries: HashMap::new(),
             summary_expanded: false,
@@ -198,11 +205,52 @@ impl AppState {
     /// Number of commit rows visible in the list given the current terminal height, accounting for
     /// the (possibly expanded) summary footer.
     pub fn viewport_rows(&self) -> usize {
-        (self
-            .size
+        let main = self.main_rows();
+        (main.saturating_sub(main * self.diff_pct() / 100)).max(1) as usize
+    }
+
+    /// Rows available to the list + diff pane (the body, minus the AI-summary footer).
+    fn main_rows(&self) -> u16 {
+        self.size
             .1
-            .saturating_sub(CHROME_ROWS + self.summary_panel_rows()))
-        .max(1) as usize
+            .saturating_sub(CHROME_ROWS + self.summary_panel_rows())
+    }
+
+    /// The diff pane's share of the main area (percent). The pane sits *below* the list: closed → 0,
+    /// open → 50, expanded (`f`) → 90.
+    fn diff_pct(&self) -> u16 {
+        if !self.preview_open {
+            0
+        } else if self.expanded {
+            90
+        } else {
+            50
+        }
+    }
+
+    /// Inner width (columns) of the diff pane. The pane spans the full terminal width (stacked below
+    /// the list), so a wide terminal gives the diff tool room for a side-by-side layout.
+    pub fn preview_width(&self) -> u16 {
+        self.size.0.saturating_sub(2).max(1)
+    }
+
+    /// Inner height (rows) of the diff pane content, minus its border — used to clamp scrolling.
+    pub fn preview_height(&self) -> u16 {
+        let main = self.main_rows();
+        (main * self.diff_pct() / 100).saturating_sub(2).max(1)
+    }
+
+    /// Number of lines in the currently-loaded diff text (for scroll clamping); 0 if not ready.
+    pub fn preview_lines(&self) -> usize {
+        match &self.preview {
+            PreviewState::Ready { text, .. } => text.lines().count(),
+            _ => 0,
+        }
+    }
+
+    /// The largest valid scroll offset so the last diff line can reach the top of the pane.
+    pub fn max_preview_scroll(&self) -> u16 {
+        (self.preview_lines() as u16).saturating_sub(self.preview_height())
     }
 
     /// The AI-summary state for the selected commit, if any is recorded.

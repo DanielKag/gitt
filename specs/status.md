@@ -9,8 +9,8 @@
 `gitt status` presents the working tree as an interactive, full-screen TUI: a flat list of the files
 git would report in `git status`, each shown with a two-letter `XY` status badge (index + worktree,
 e.g. `M `, ` M`, `MM`, `A `, `??`, ` D`). The user browses files with the same vim motions as
-`gitt log`, stages/unstages a file with a single key, previews the diff of the selected file in a side
-pane (reusing the log preview), and discards a file's changes behind a confirmation. It is the staging
+`gitt log`, stages/unstages a file with a single key, previews the diff of the selected file in a pane
+below the list (reusing the shared colorized preview), and discards a file's changes behind a confirmation. It is the staging
 half of a commit workflow (committing itself is a later feature). Every stage/unstage/discard re-reads
 real git state so the view never drifts from reality. By design it **looks and behaves like
 `gitt log`** — same theme, same list/overlay/help-bar components, same navigation, preview, and quit
@@ -25,7 +25,7 @@ keys — so the two commands feel like one tool.
 | STAT-03 | Vim motions move the selection across the file list exactly as in `gitt log`: `j`/`k`/`↓`/`↑`, `g`/`G`, `Ctrl-d`/`Ctrl-u`, `Ctrl-f`/`Ctrl-b`. Selection never leaves bounds. | unit       |
 | STAT-04 | `Space` toggles staging of the selected file: if it has worktree/untracked changes (`Y != ' '`) it is staged (`git add -- <path>`), otherwise (fully staged, `Y == ' '`) it is unstaged (`git restore --staged -- <path>`). Afterwards the list reloads and the badge flips. | unit, e2e  |
 | STAT-05 | `s` always stages the selected file (`git add`) and `u` always unstages it (`git restore --staged`), regardless of its current badge. | unit       |
-| STAT-06 | `Tab` toggles a diff-preview pane for the selected file: an untracked row shows the file's contents, a row with worktree changes (`Y != ' '`) shows the worktree diff (`git diff -- <path>`), and a fully-staged row shows the cached diff (`git diff --staged -- <path>`). Toggling again hides it. | unit, e2e  |
+| STAT-06 | `Tab` toggles a diff-preview pane for the selected file: an untracked row shows the file's contents, a row with worktree changes (`Y != ' '`) shows the worktree diff (`git diff -- <path>`), and a fully-staged row shows the cached diff (`git diff --staged -- <path>`). Toggling again hides it. The pane is colorized via the shared configurable diff tool and behaves like `gitt diff`'s: it sits **below** the list (full width), `f` expands it to 90% height, and `Shift+j`/`Shift+k` (`Shift+↓`/`↑`) scroll it. See `specs/diff.md` DIFF-15..19. | unit, e2e  |
 | STAT-07 | `d` (or **Discard changes** in the action menu) opens a confirmation overlay naming the file; confirming discards that file's changes — a tracked file is restored (`git restore -- <path>`), an untracked file is deleted from disk. The list then reloads. | unit, e2e  |
 | STAT-08 | The confirmation overlay is mandatory for discard: `Esc` / `n` cancels leaving the file untouched; `Enter` / `y` confirms. No other key discards. | unit       |
 | STAT-09 | `Enter` opens a per-file action menu (reusing the log action-menu overlay) with **Stage**/**Unstage** (label reflects the file's side), **Discard changes**, and **Copy path**. `Esc` closes it. | unit, e2e  |
@@ -87,4 +87,5 @@ base list), `q`/`Ctrl-c` (quit)._
 - Creating a commit, amend, push (this feature only stages; committing is a separate spec).
 - Fuzzy file filtering with `/` (the shared fuzzy component is available; deferred to keep scope tight).
 - Multi-select / bulk stage-all.
-- Syntax-highlighted / `delta`-colored diffs (plain text, exactly as `gitt log`'s preview).
+- (Delivered) Syntax-highlighted / tool-colored diffs — now via the shared configurable diff tool
+  (`--diff-tool`/`$GITT_DIFF_TOOL`) + `ui::ansi` (see `specs/diff.md` DIFF-15..17).

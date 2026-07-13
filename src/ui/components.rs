@@ -77,10 +77,15 @@ pub fn overlay_menu(frame: &mut Frame, body: Rect, title: &str, labels: &[&str],
     );
 }
 
-/// Render a bordered diff-preview pane with the given already-resolved text.
-pub fn preview_pane(frame: &mut Frame, area: Rect, title: &str, text: &str) {
+/// Render a bordered diff-preview pane. `text` may carry ANSI color from the configured third-party
+/// diff tool (`domain::diff_tool`); it is parsed into styled spans via [`super::ansi::ansi_to_text`]
+/// so the diff shows in color. Plain text (placeholders, or the no-tool fallback) renders unchanged.
+/// `scroll` is the first visible line (vertical offset). Long lines clip at the pane edge (diffs are
+/// not wrapped, to keep gutters/columns aligned).
+pub fn preview_pane(frame: &mut Frame, area: Rect, title: &str, text: &str, scroll: u16) {
     let block = Block::bordered().title(title.to_string());
-    frame.render_widget(Paragraph::new(text.to_string()).block(block), area);
+    let body = super::ansi::ansi_to_text(text);
+    frame.render_widget(Paragraph::new(body).scroll((scroll, 0)).block(block), area);
 }
 
 /// Render a bordered pane whose (already-styled) text wraps to the pane width. Used for the log

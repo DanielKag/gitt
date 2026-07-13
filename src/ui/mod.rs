@@ -1,6 +1,7 @@
 //! Pure rendering: `draw(frame, state)` reads only `&AppState` and writes only into the frame.
 //! No I/O, no port calls — so it is exercised directly with ratatui's `TestBackend`.
 
+pub mod ansi;
 pub mod branch;
 pub mod components;
 pub mod diff;
@@ -87,13 +88,19 @@ fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
     .split(area);
     let main = rows[0];
 
+    // The diff pane sits BELOW the commit list (vertical split) so it spans the full width — room for
+    // a side-by-side layout. `f` grows it from 50% to 90% of the height (list stays visible at 10%).
     let (list_area, preview_area) = if state.preview_open {
-        let cols = Layout::new(
-            Direction::Horizontal,
-            [Constraint::Percentage(50), Constraint::Percentage(50)],
+        let diff_pct = if state.expanded { 90 } else { 50 };
+        let panes = Layout::new(
+            Direction::Vertical,
+            [
+                Constraint::Percentage(100 - diff_pct),
+                Constraint::Percentage(diff_pct),
+            ],
         )
         .split(main);
-        (cols[0], Some(cols[1]))
+        (panes[0], Some(panes[1]))
     } else {
         (main, None)
     };
@@ -205,7 +212,7 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
         PreviewState::Ready { text, .. } => text.clone(),
         PreviewState::Failed { error, .. } => format!("diff failed: {error}"),
     };
-    preview_pane(frame, area, "diff", &text);
+    preview_pane(frame, area, "diff", &text, state.preview_scroll);
 }
 
 fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {

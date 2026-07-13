@@ -90,7 +90,12 @@ pub struct DiffState {
     pub top: usize,
     pub mode: DiffMode,
     pub preview_open: bool,
+    /// When true, the diff pane takes most of the height (90%, list shrinks to 10%) so a large diff
+    /// is easier to read while the current file stays visible. Toggled with `f`.
+    pub expanded: bool,
     pub preview: DiffPreview,
+    /// First visible line of the diff pane content (vertical scroll offset within the diff).
+    pub preview_scroll: u16,
     pub menu: Option<DiffMenu>,
     /// Transient status-line message.
     pub status: Option<String>,
@@ -111,7 +116,9 @@ impl DiffState {
             mode: DiffMode::List,
             // The diff pane is the point of this screen, so it starts open.
             preview_open: true,
+            expanded: false,
             preview: DiffPreview::Idle,
+            preview_scroll: 0,
             menu: None,
             status: None,
             main_branch,
@@ -120,9 +127,54 @@ impl DiffState {
         }
     }
 
-    /// Number of file rows visible given the current terminal height.
+    /// The diff pane's share of the body height (percent). The pane sits *below* the file list:
+    /// closed → 0, open → 50, expanded (`f`) → 90 (list shrinks to 10% but stays visible).
+    fn diff_pct(&self) -> u16 {
+        if !self.preview_open {
+            0
+        } else if self.expanded {
+            90
+        } else {
+            50
+        }
+    }
+
+    /// Rows of the body (between header and status line).
+    fn body_rows(&self) -> u16 {
+        self.size.1.saturating_sub(DIFF_CHROME_ROWS)
+    }
+
+    /// Number of file rows visible: the body minus the diff pane below it.
     pub fn viewport_rows(&self) -> usize {
-        (self.size.1.saturating_sub(DIFF_CHROME_ROWS)).max(1) as usize
+        let body = self.body_rows();
+        (body.saturating_sub(body * self.diff_pct() / 100)).max(1) as usize
+    }
+
+    /// Inner width (columns) of the diff pane. Because the pane spans the full terminal width (it is
+    /// stacked below the list, not beside it), this is the whole width minus the pane border — so a
+    /// wide terminal gives the diff tool room for a side-by-side layout.
+    pub fn preview_width(&self) -> u16 {
+        self.size.0.saturating_sub(2).max(1)
+    }
+
+    /// Inner height (rows) of the diff pane content, minus its border — how many diff lines are
+    /// visible, used to clamp scrolling.
+    pub fn preview_height(&self) -> u16 {
+        let body = self.body_rows();
+        (body * self.diff_pct() / 100).saturating_sub(2).max(1)
+    }
+
+    /// Number of lines in the currently-loaded diff text (for scroll clamping); 0 if not ready.
+    pub fn preview_lines(&self) -> usize {
+        match &self.preview {
+            DiffPreview::Ready { text, .. } => text.lines().count(),
+            _ => 0,
+        }
+    }
+
+    /// The largest valid scroll offset so the last diff line can reach the top of the pane.
+    pub fn max_preview_scroll(&self) -> u16 {
+        (self.preview_lines() as u16).saturating_sub(self.preview_height())
     }
 
     /// The active scope's loaded files (empty slice if not loaded).

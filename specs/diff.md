@@ -43,6 +43,11 @@ between scopes is instant.
 | DIFF-12 | `q` / `Ctrl-c` quit the TUI cleanly, restoring the terminal.                                                                        | unit, e2e  |
 | DIFF-13 | Running `gitt diff` outside a git repository prints a clear error and exits non-zero (no panic, no TUI).                            | e2e        |
 | DIFF-14 | `gitt diff` reuses the shared `theme`, the shared list / overlay / preview / help-bar components, and the shared navigation + preview + quit keybindings, so it is visually and behaviorally consistent with `gitt log` and `gitt status`. | (reference) |
+| DIFF-15 | The diff pane is **colorized** by piping the diff through a configurable third-party renderer and converting its ANSI output into styled spans (`ui::ansi::ansi_to_text`). Supported tools: `difftastic`, `delta`, `git-split-diffs`. When no tool is configured/installed the pane shows plain `git diff` text (unchanged), so a preview never fails. The same colorized pane is shared by `gitt log` and `gitt status`. | unit |
+| DIFF-16 | The tool is given the **actual pane width**, so a wide terminal yields a wide pane and a side-by-side view while a narrow/half window collapses to unified — and the pane re-renders on a terminal resize so this tracks the live window. | unit |
+| DIFF-17 | The renderer is selected by `--diff-tool <name>` or `$GITT_DIFF_TOOL` (`difftastic`\|`delta`\|`git-split-diffs`\|`none`); unset auto-detects the first tool installed on `PATH` (native Rust tools first). A chosen-but-missing tool degrades to plain, never an error. | unit |
+| DIFF-18 | The diff pane sits **below** the file list (a vertical split), so it spans the full terminal width — room for a side-by-side layout. Default is a 50/50 split; `f` expands the diff to 90% of the height (the list shrinks to 10% but stays visible), and `f` again restores 50/50. `f` is a no-op when the pane is closed. | unit |
+| DIFF-19 | `Shift+j`/`Shift+k` (and `Shift+↓`/`Shift+↑`) scroll the diff pane so a diff taller than the pane can be read end-to-end; scrolling is clamped to the content and resets to the top when the selected file or scope changes. | unit |
 
 ## Keybindings / UX
 
@@ -55,6 +60,8 @@ between scopes is instant.
 | `Ctrl-f`/`Ctrl-b`  | List    | Page down / up                                                |
 | `→` / `←`          | List    | Next / previous diff scope (wraps)                            |
 | `Tab`              | List    | Toggle the diff pane                                          |
+| `f`                | List    | Expand the diff pane to 90% height (list shrinks, stays visible) |
+| `Shift-j`/`Shift-k`| List    | Scroll the diff pane down / up (also `Shift-↓`/`Shift-↑`)     |
 | `R`                | List    | Reload the active scope from git                              |
 | `Enter`            | List    | Open the per-file action menu                                 |
 | `j`/`k`, `Enter`   | Menu    | Navigate / confirm action                                     |
@@ -72,7 +79,14 @@ _Keys shared verbatim with `gitt log`/`gitt status`: `j`/`k`/`g`/`G`/`Ctrl-d`/`u
   the pure `parse_diff_name_status`; the port only shells out, resolves the vs-main base ref, and calls
   it — mirroring how `log`/`status` return already-parsed values).
 - `diff_scope_file(scope, path) -> String` — the plain-text diff of one file for the scope
-  (`git diff [--staged|HEAD|<base>...HEAD] --no-color -- <path>`).
+  (`git diff [--staged|HEAD|<base>...HEAD] --no-color -- <path>`). Used by "Copy diff", which must
+  yield plain text.
+- `render_scope_diff(scope, path, width) -> String` — the same diff rendered for *display* at
+  `width` columns through the configured diff tool (ANSI colored), falling back to plain text. Two
+  invocation shapes behind one config knob (`domain::diff_tool`): **pager** tools (`delta`,
+  `git-split-diffs`) read git's unified diff on stdin; the **external-diff** engine (`difftastic`)
+  is run via `GIT_EXTERNAL_DIFF`. The parallel `render_commit_diff`/`render_file_diff` back the
+  `gitt log`/`gitt status` previews.
 
 ## Errors / edge cases
 
@@ -84,12 +98,16 @@ _Keys shared verbatim with `gitt log`/`gitt status`: `j`/`k`/`g`/`G`/`Ctrl-d`/`u
 - Binary files: git reports them in `--name-status`; the per-file diff shows git's "Binary files
   differ" text as-is (no special handling needed).
 
+## Errors / edge cases (diff tool)
+
+- Configured tool not on `PATH` (e.g. no Node for `git-split-diffs`), or the tool spawn/exit fails
+  → the pane falls back to plain unified text; no crash, no error surfaced.
+- `GITT_DIFF_TOOL=none` forces plain text (used by e2e, since CI has none of the tools installed).
+
 ## Out of scope (for this POC)
 
-- **Vertical scrolling inside the diff pane.** Like `gitt log`/`gitt status`, the pane shows the diff
-  from the top and clips; `j`/`k` pages between files. In-pane scrolling is a separate later spec.
 - **Mutations.** No staging/unstaging/discarding here — that is `gitt status`. `gitt diff` is a viewer.
-- Syntax-highlighted / `delta`-colored diffs (plain text, exactly as the other screens' previews).
 - Fuzzy file filtering with `/` (the shared fuzzy component exists; deferred to keep scope tight).
-- Hunk-/line-level navigation, comments, side-by-side (split) diffs, word-level intraline highlight.
+- Hunk-/line-level navigation, comments, word-level intraline highlight (the diff tool may provide
+  its own intraline highlighting).
 - Configurable scope set / arbitrary `gitt diff <revA> <revB>` ref arguments.

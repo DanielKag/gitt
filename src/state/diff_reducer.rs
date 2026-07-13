@@ -18,6 +18,11 @@ pub fn update_diff(state: &mut DiffState, event: Event) -> Vec<Effect> {
         Event::Resize(w, h) => {
             state.size = (w, h);
             state.clamp_scroll();
+            // Re-render the pane for the new width so the diff tool re-picks split vs unified as the
+            // window grows or shrinks (this is what makes the view responsive to a live resize).
+            if state.preview_open && state.selected_path().is_some() {
+                return request_diff(state);
+            }
             vec![]
         }
         Event::DiffFilesLoaded { scope, files } => {
@@ -83,6 +88,7 @@ fn on_key(state: &mut DiffState, key: KeyEvent) -> Vec<Effect> {
 
 fn on_key_list(state: &mut DiffState, key: KeyEvent) -> Vec<Effect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let half = (state.viewport_rows() / 2).max(1) as isize;
     let page = state.viewport_rows().max(1) as isize;
 
@@ -90,6 +96,11 @@ fn on_key_list(state: &mut DiffState, key: KeyEvent) -> Vec<Effect> {
         // Esc from the base list quits; the Menu handles its own Esc first, so repeated Esc is always
         // the way out (consistent across every gitt screen).
         KeyCode::Char('q') | KeyCode::Esc => quit(state),
+        // Shift+j/k and Shift+↓/↑ scroll the diff pane (the plain keys move the file selection).
+        KeyCode::Char('J') => scroll_preview(state, 1),
+        KeyCode::Char('K') => scroll_preview(state, -1),
+        KeyCode::Down if shift => scroll_preview(state, 1),
+        KeyCode::Up if shift => scroll_preview(state, -1),
         KeyCode::Char('j') | KeyCode::Down => move_by(state, 1),
         KeyCode::Char('k') | KeyCode::Up => move_by(state, -1),
         KeyCode::Char('g') => set_cursor(state, 0),
@@ -101,6 +112,7 @@ fn on_key_list(state: &mut DiffState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Right => switch_scope(state, state.scope.next()),
         KeyCode::Left => switch_scope(state, state.scope.prev()),
         KeyCode::Tab => toggle_preview(state),
+        KeyCode::Char('f') => toggle_expanded(state),
         KeyCode::Char('R') => reload(state),
         KeyCode::Enter => open_menu(state),
         _ => vec![],
@@ -198,9 +210,34 @@ fn toggle_preview(state: &mut DiffState) -> Vec<Effect> {
     if state.preview_open {
         request_diff(state)
     } else {
+        // A hidden pane can't be expanded; reset so re-opening starts at the split layout.
+        state.expanded = false;
         state.preview = DiffPreview::Idle;
         vec![]
     }
+}
+
+/// Toggle the expanded diff pane (`f`): the diff grows to 90% of the height (the file list shrinks
+/// to 10% but stays visible) so a large diff is easier to read. A no-op when the pane is closed.
+/// (The pane always spans the full width, so this doesn't change the diff-tool layout — no reload.)
+fn toggle_expanded(state: &mut DiffState) -> Vec<Effect> {
+    if !state.preview_open {
+        return vec![];
+    }
+    state.expanded = !state.expanded;
+    // Keep the scroll offset valid for the pane's new height.
+    state.preview_scroll = state.preview_scroll.min(state.max_preview_scroll());
+    vec![]
+}
+
+/// Scroll the diff pane by `delta` lines (Shift+j/k, Shift+↓/↑), clamped so it can't overscroll.
+fn scroll_preview(state: &mut DiffState, delta: i32) -> Vec<Effect> {
+    if !matches!(state.preview, DiffPreview::Ready { .. }) {
+        return vec![];
+    }
+    let max = state.max_preview_scroll() as i32;
+    state.preview_scroll = (state.preview_scroll as i32 + delta).clamp(0, max) as u16;
+    vec![]
 }
 
 /// Ask the shell to load the diff for the current selection into the pane.
@@ -208,9 +245,11 @@ fn request_diff(state: &mut DiffState) -> Vec<Effect> {
     match state.selected_path() {
         Some(path) => {
             state.preview = DiffPreview::Loading(path.clone());
+            state.preview_scroll = 0; // a fresh diff starts at the top
             vec![Effect::LoadDiffText {
                 scope: state.scope,
                 path,
+                width: state.preview_width(),
             }]
         }
         None => {
@@ -384,8 +423,91 @@ mod tests {
             vec![Effect::LoadDiffText {
                 scope: DiffScope::Staged,
                 path: "s.rs".into(),
+                width: 78,
             }]
         );
+    }
+
+    // DIFF-18: `f` expands the diff pane to 90% of the height (list shrinks but stays visible), and
+    // `f` again restores the split. The pane spans the full width in both states, so the diff-tool
+    // width is unchanged and no reload is needed.
+    #[test]
+    fn diff_18_f_toggles_expanded_height() {
+        let mut s = app(); // 80x24, pane open, cursor on a.rs
+        assert!(!s.expanded);
+        let width = s.preview_width();
+        let split_rows = s.preview_height();
+
+        let effects = update_diff(&mut s, ch('f'));
+        assert!(s.expanded, "f expands the diff pane");
+        assert_eq!(effects, vec![], "no reload — width is unchanged");
+        assert_eq!(
+            s.preview_width(),
+            width,
+            "pane is full-width in both states"
+        );
+        assert!(
+            s.preview_height() > split_rows,
+            "expanded pane is taller ({} > {split_rows})",
+            s.preview_height()
+        );
+
+        // Toggle back.
+        update_diff(&mut s, ch('f'));
+        assert!(!s.expanded);
+        assert_eq!(s.preview_height(), split_rows);
+    }
+
+    // `f` is a no-op when the pane is closed.
+    #[test]
+    fn diff_18_f_noop_when_pane_closed() {
+        let mut s = app();
+        update_diff(&mut s, key(KeyCode::Tab)); // close pane
+        assert!(!s.preview_open);
+        let effects = update_diff(&mut s, ch('f'));
+        assert!(!s.expanded);
+        assert_eq!(effects, vec![]);
+    }
+
+    // DIFF-19: Shift+j/k (and Shift+↓/↑) scroll the diff pane, clamped to the content.
+    #[test]
+    fn diff_19_shift_jk_scrolls_diff() {
+        let mut s = app();
+        s.size = (80, 24);
+        // A diff taller than the pane so there is room to scroll.
+        let body: String = (0..200).map(|i| format!("line {i}\n")).collect();
+        s.preview = DiffPreview::Ready {
+            path: "a.rs".into(),
+            text: body,
+        };
+        assert_eq!(s.preview_scroll, 0);
+
+        // Shift+j scrolls down; Shift+k back up (clamped at 0).
+        update_diff(&mut s, ch('J'));
+        assert_eq!(s.preview_scroll, 1);
+        update_diff(&mut s, ch('J'));
+        assert_eq!(s.preview_scroll, 2);
+        update_diff(&mut s, ch('K'));
+        assert_eq!(s.preview_scroll, 1);
+        update_diff(&mut s, ch('K'));
+        update_diff(&mut s, ch('K'));
+        assert_eq!(s.preview_scroll, 0, "cannot scroll above the top");
+
+        // Shift+↓ also scrolls; it cannot overscroll past the last line.
+        let shift_down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        for _ in 0..500 {
+            update_diff(&mut s, shift_down.clone());
+        }
+        assert_eq!(s.preview_scroll, s.max_preview_scroll());
+        assert!(s.preview_scroll > 0);
+
+        // Moving to another file resets the scroll to the top.
+        s.loads.insert(
+            DiffScope::Unstaged,
+            DiffLoad::Loaded(vec![file('M', "a.rs"), file('M', "b.rs")]),
+        );
+        update_diff(&mut s, ch('j'));
+        assert_eq!(s.preview_scroll, 0);
     }
 
     // DIFF-06: the pane is open by default; Tab toggles it and requests the selected file's diff.
@@ -408,6 +530,7 @@ mod tests {
             vec![Effect::LoadDiffText {
                 scope: DiffScope::Unstaged,
                 path: "a.rs".into(),
+                width: 78,
             }]
         );
     }
@@ -422,6 +545,7 @@ mod tests {
             vec![Effect::LoadDiffText {
                 scope: DiffScope::Unstaged,
                 path: "b.rs".into(),
+                width: 78,
             }]
         );
     }

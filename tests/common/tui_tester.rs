@@ -69,7 +69,10 @@ impl Tui {
         // Isolate the summary cache too, so tests never read/write the developer's real ~/.cache.
         cmd.env("XDG_CACHE_HOME", home.path());
         cmd.env("GITT_NOW", NOW.to_string());
-        cmd.env("GITT_NO_DELTA", "1");
+        // Force plain diffs: the harness passes the real PATH, so without this a dev machine with
+        // difftastic/delta/git-split-diffs installed would auto-detect it and colorize the pane,
+        // making the rendered-grid assertions non-deterministic.
+        cmd.env("GITT_DIFF_TOOL", "none");
         cmd.env("GITT_TEST_SINK_DIR", sink.path());
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
