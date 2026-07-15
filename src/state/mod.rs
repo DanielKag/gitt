@@ -27,6 +27,7 @@ pub use event::Event;
 pub use model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState, SummaryState};
 pub use reducer::update;
 pub use status::{
-    ConfirmDiscard, FileAction, FileMenu, FilePreview, StatusLoad, StatusMode, StatusState,
+    CommitEditor, ConfirmDiscard, FileAction, FileMenu, FilePreview, PendingCommit, StatusLoad,
+    StatusMode, StatusState,
 };
 pub use status_reducer::update_status;

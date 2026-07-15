@@ -76,6 +76,16 @@ pub trait GitRepo: Send + Sync {
     /// Discard a file's changes: restore a tracked file, or delete an untracked one.
     fn discard(&self, path: &str, untracked: bool) -> Result<(), GitError>;
 
+    // --- gitt commit -------------------------------------------------------------------------------
+    // The commit itself is not a port method: it runs in the restored terminal after the TUI exits
+    // (so pre-commit hooks stream live). Only its read-only inputs are here.
+    /// HEAD's full commit message (`git log -1 --pretty=%B`, trimmed) — the amend prefill, kept whole
+    /// so amending never silently drops an existing multi-line body.
+    fn head_message(&self) -> Result<String, GitError>;
+    /// The whole staged diff (`git diff --staged -w`), whitespace-ignored — the input the AI
+    /// commit-message suggestion reasons over (kept small, like the summary diffs).
+    fn staged_diff(&self) -> Result<String, GitError>;
+
     // --- gitt diff ---------------------------------------------------------------------------------
     /// The changed files for a diff scope (parsed `git diff --name-status -z <scope-args>`).
     fn diff_files(&self, scope: DiffScope) -> Result<Vec<DiffFile>, GitError>;

@@ -9,7 +9,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::effect::Effect;
 use super::event::Event;
 use super::status::{
-    ConfirmDiscard, FileAction, FileMenu, FilePreview, StatusLoad, StatusMode, StatusState,
+    CommitEditor, ConfirmDiscard, FileAction, FileMenu, FilePreview, PendingCommit, StatusLoad,
+    StatusMode, StatusState,
 };
 
 /// Fold an event into the status-screen state, returning the side effects the shell must perform.
@@ -60,6 +61,50 @@ pub fn update_status(state: &mut StatusState, event: Event) -> Vec<Effect> {
             // Reload from git regardless of outcome so the view can't drift.
             vec![Effect::LoadStatus]
         }
+        // The amend prefill landed: fill the (still-empty) editor with HEAD's message. A failure
+        // (e.g. no commit to amend) shows an inline hint and leaves the field editable.
+        Event::HeadMessageLoaded(result) => {
+            if let Some(editor) = &mut state.commit
+                && editor.amend
+            {
+                editor.busy = false;
+                match result {
+                    Ok(msg) if editor.message.is_empty() => editor.message = msg,
+                    Ok(_) => {}
+                    Err(e) => editor.hint = Some(format!("cannot amend: {e}")),
+                }
+            }
+            vec![]
+        }
+        Event::CommitSuggestionChunk { delta } => {
+            if let Some(editor) = &mut state.commit
+                && editor.busy
+            {
+                editor.message.push_str(&delta);
+            }
+            vec![]
+        }
+        // Only settle a suggestion into an editor that's actually awaiting one (`busy`), so a late
+        // result from a cancelled-then-reopened editor can't clobber a fresh draft.
+        Event::CommitSuggestionReady { text } => {
+            if let Some(editor) = &mut state.commit
+                && editor.busy
+            {
+                editor.busy = false;
+                editor.message = text;
+                editor.hint = None;
+            }
+            vec![]
+        }
+        Event::CommitSuggestionFailed { error } => {
+            if let Some(editor) = &mut state.commit
+                && editor.busy
+            {
+                editor.busy = false;
+                editor.hint = Some(format!("suggestion failed: {error}"));
+            }
+            vec![]
+        }
         // Log-screen events never reach the status reducer at runtime (separate screen); ignore.
         _ => vec![],
     }
@@ -75,6 +120,7 @@ fn on_key(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
         StatusMode::List => on_key_list(state, key),
         StatusMode::Menu => on_key_menu(state, key),
         StatusMode::Confirm => on_key_confirm(state, key),
+        StatusMode::Commit => on_key_commit(state, key),
     }
 }
 
@@ -107,8 +153,46 @@ fn on_key_list(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char(' ') => toggle_stage(state),
         KeyCode::Char('s') => stage_selected(state),
         KeyCode::Char('u') => unstage_selected(state),
+        KeyCode::Char('c') => open_commit(state),
+        KeyCode::Char('a') => open_amend(state),
         KeyCode::Char('d') => open_confirm(state),
         KeyCode::Enter => open_menu(state),
+        _ => vec![],
+    }
+}
+
+/// The commit-message editor keymap. Input is paused while `busy` (a suggestion streaming or the amend
+/// prefill loading) so it can't interleave with typing; only Esc/Ctrl-c get through.
+///
+/// AI suggestion is bound to `Ctrl-s`, NOT bare `s`: the editor is a free-text field, and a great many
+/// commit subjects start with "s" ("ship", "start", "support"…) — a bare-`s` command would hijack
+/// them. `Ctrl-s` is collision-free (raw mode clears flow control) and reads as "suggest".
+fn on_key_commit(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    if ctrl && key.code == KeyCode::Char('s') {
+        return suggest_commit_message(state);
+    }
+    match key.code {
+        KeyCode::Esc => {
+            state.commit = None;
+            state.mode = StatusMode::List;
+            vec![]
+        }
+        _ if editor_busy(state) => vec![], // input paused mid-stream/prefill
+        KeyCode::Enter => commit_from_editor(state),
+        KeyCode::Backspace => {
+            if let Some(editor) = &mut state.commit {
+                editor.message.pop();
+            }
+            vec![]
+        }
+        KeyCode::Char(c) if !ctrl => {
+            if let Some(editor) = &mut state.commit {
+                editor.message.push(c);
+                editor.hint = None;
+            }
+            vec![]
+        }
         _ => vec![],
     }
 }
@@ -258,6 +342,80 @@ fn unstage_selected(state: &mut StatusState) -> Vec<Effect> {
         }
         None => vec![],
     }
+}
+
+fn editor_busy(state: &StatusState) -> bool {
+    state.commit.as_ref().is_some_and(|e| e.busy)
+}
+
+/// The paths of the currently-staged files (context for the AI suggestion, and the "is anything
+/// staged?" guard for a non-amend commit).
+fn staged_paths(state: &StatusState) -> Vec<String> {
+    state
+        .entries()
+        .iter()
+        .filter(|e| e.is_staged())
+        .map(|e| e.path.clone())
+        .collect()
+}
+
+/// `c`: open the commit-message editor for a fresh commit.
+fn open_commit(state: &mut StatusState) -> Vec<Effect> {
+    state.commit = Some(CommitEditor::new(false));
+    state.mode = StatusMode::Commit;
+    vec![]
+}
+
+/// `a`: open the editor in amend mode, prefilled asynchronously with HEAD's message.
+fn open_amend(state: &mut StatusState) -> Vec<Effect> {
+    let mut editor = CommitEditor::new(true);
+    editor.busy = true; // input paused until the prefill lands
+    state.commit = Some(editor);
+    state.mode = StatusMode::Commit;
+    vec![Effect::LoadHeadMessage]
+}
+
+/// `Enter`: confirm the commit. An empty message is a no-op (stays open); a non-amend commit with
+/// nothing staged is refused with an inline hint. Otherwise we DON'T run `git` here — we record a
+/// [`PendingCommit`] and quit, so the shell runs it in the restored terminal with inherited stdio
+/// (pre-commit hooks stream live; a failure stays on screen and is easy to re-run). This makes commit
+/// a terminal handoff, like a successful `gitt branch` checkout (BR-06).
+fn commit_from_editor(state: &mut StatusState) -> Vec<Effect> {
+    let Some(editor) = &state.commit else {
+        return vec![];
+    };
+    let message = editor.message.trim().to_string();
+    let amend = editor.amend;
+    if message.is_empty() {
+        return vec![]; // nothing to commit yet; keep the editor open (like branch-create).
+    }
+    if !amend && staged_paths(state).is_empty() {
+        if let Some(editor) = &mut state.commit {
+            editor.hint = Some("nothing staged to commit".to_string());
+        }
+        return vec![];
+    }
+    state.commit = None;
+    state.pending_commit = Some(PendingCommit { message, amend });
+    state.should_quit = true;
+    vec![Effect::Quit]
+}
+
+/// `s` (blank editor) / `Ctrl-s`: draft an AI commit message from the staged diff. Clears the buffer
+/// and streams the suggestion in; a duplicate request while one is in flight is ignored.
+fn suggest_commit_message(state: &mut StatusState) -> Vec<Effect> {
+    if editor_busy(state) {
+        return vec![];
+    }
+    let files = staged_paths(state);
+    let branch = state.branch.clone();
+    let Some(editor) = &mut state.commit else {
+        return vec![];
+    };
+    editor.message.clear();
+    editor.hint = None;
+    editor.busy = true;
+    vec![Effect::SuggestCommitMessage { branch, files }]
 }
 
 fn open_confirm(state: &mut StatusState) -> Vec<Effect> {
@@ -630,6 +788,280 @@ mod tests {
         let effects = update_status(&mut s2, ctrl('c'));
         assert!(s2.should_quit);
         assert_eq!(effects, vec![Effect::Quit]);
+    }
+
+    // --- gitt commit (CMT-*) ---------------------------------------------------------------------
+
+    fn clean() -> StatusState {
+        // A dirty tree with nothing staged (all worktree-side), for the "nothing staged" guard.
+        let mut s = StatusState::new("feature".into());
+        s.size = (80, 24);
+        s.load = StatusLoad::Loaded(vec![entry(' ', 'M', "a.txt"), entry('?', '?', "b.txt")]);
+        s
+    }
+
+    // CMT-01: `c` opens the commit editor (fresh commit).
+    #[test]
+    fn cmt_01_c_opens_commit_editor() {
+        let mut s = app();
+        let effects = update_status(&mut s, ch('c'));
+        assert_eq!(effects, vec![]);
+        assert_eq!(s.mode, StatusMode::Commit);
+        let editor = s.commit.as_ref().unwrap();
+        assert!(!editor.amend);
+        assert!(editor.message.is_empty());
+        assert!(!editor.busy);
+    }
+
+    // CMT-02: typing edits the message, Backspace deletes, empty Enter is a no-op.
+    #[test]
+    fn cmt_02_typing_and_empty_enter() {
+        let mut s = app();
+        update_status(&mut s, ch('c'));
+        // Empty Enter: no-op, stays open.
+        assert_eq!(update_status(&mut s, key(KeyCode::Enter)), vec![]);
+        assert_eq!(s.mode, StatusMode::Commit);
+        // Type "hi", backspace once → "h".
+        drive(&mut s, vec![ch('h'), ch('i'), key(KeyCode::Backspace)]);
+        assert_eq!(s.commit.as_ref().unwrap().message, "h");
+    }
+
+    // CMT-03 / CMT-09: Enter with a message + staged changes records the pending commit and quits, so
+    // the shell runs `git commit` in the restored terminal (commit is a terminal handoff, not
+    // in-place). No `git` effect fires from the reducer.
+    #[test]
+    fn cmt_03_09_enter_defers_commit_and_quits() {
+        let mut s = app(); // staged_new.txt is staged (A )
+        update_status(&mut s, ch('c'));
+        drive(&mut s, vec![ch('f'), ch('i'), ch('x')]);
+        let effects = update_status(&mut s, key(KeyCode::Enter));
+        assert_eq!(effects, vec![Effect::Quit]);
+        assert!(s.should_quit);
+        assert!(s.commit.is_none());
+        assert_eq!(
+            s.pending_commit,
+            Some(PendingCommit {
+                message: "fix".into(),
+                amend: false
+            })
+        );
+    }
+
+    // CMT-04: committing with nothing staged (non-amend) is refused inline, no effect.
+    #[test]
+    fn cmt_04_nothing_staged_is_refused() {
+        let mut s = clean();
+        update_status(&mut s, ch('c'));
+        drive(&mut s, vec![ch('x')]);
+        let effects = update_status(&mut s, key(KeyCode::Enter));
+        assert_eq!(effects, vec![], "no commit runs");
+        assert_eq!(s.mode, StatusMode::Commit, "editor stays open");
+        assert_eq!(
+            s.commit.as_ref().unwrap().hint.as_deref(),
+            Some("nothing staged to commit")
+        );
+    }
+
+    // CMT-05: `a` opens amend, loads HEAD's message to prefill, then Enter amends.
+    #[test]
+    fn cmt_05_amend_prefills_and_commits() {
+        let mut s = app();
+        let effects = update_status(&mut s, ch('a'));
+        assert_eq!(effects, vec![Effect::LoadHeadMessage]);
+        assert_eq!(s.mode, StatusMode::Commit);
+        let editor = s.commit.as_ref().unwrap();
+        assert!(editor.amend);
+        assert!(editor.busy, "input paused until the prefill lands");
+
+        // Prefill lands.
+        update_status(
+            &mut s,
+            Event::HeadMessageLoaded(Ok("previous subject".into())),
+        );
+        let editor = s.commit.as_ref().unwrap();
+        assert!(!editor.busy);
+        assert_eq!(editor.message, "previous subject");
+
+        let effects = update_status(&mut s, key(KeyCode::Enter));
+        assert_eq!(effects, vec![Effect::Quit]);
+        assert!(s.should_quit);
+        assert_eq!(
+            s.pending_commit,
+            Some(PendingCommit {
+                message: "previous subject".into(),
+                amend: true
+            })
+        );
+    }
+
+    // CMT-04/05: amend is exempt from the "nothing staged" guard (a reword-only amend is valid).
+    #[test]
+    fn cmt_05_amend_allowed_with_nothing_staged() {
+        let mut s = clean();
+        update_status(&mut s, ch('a'));
+        update_status(&mut s, Event::HeadMessageLoaded(Ok("subject".into())));
+        let effects = update_status(&mut s, key(KeyCode::Enter));
+        assert_eq!(effects, vec![Effect::Quit]);
+        assert_eq!(
+            s.pending_commit,
+            Some(PendingCommit {
+                message: "subject".into(),
+                amend: true
+            })
+        );
+    }
+
+    // CMT-05: a failed amend prefill (no commit yet) shows an inline hint, leaves the field editable.
+    #[test]
+    fn cmt_05_amend_prefill_failure_is_inline() {
+        let mut s = app();
+        update_status(&mut s, ch('a'));
+        update_status(
+            &mut s,
+            Event::HeadMessageLoaded(Err("does not have any commits yet".into())),
+        );
+        let editor = s.commit.as_ref().unwrap();
+        assert!(!editor.busy);
+        assert!(editor.message.is_empty());
+        assert!(editor.hint.as_deref().unwrap().contains("cannot amend"));
+    }
+
+    // CMT-06/07: `Ctrl-s` drafts a suggestion; chunks stream in; Ready settles it.
+    #[test]
+    fn cmt_06_ctrl_s_suggests_and_streams() {
+        let mut s = app();
+        update_status(&mut s, ch('c'));
+        let effects = update_status(&mut s, ctrl('s'));
+        // Branch + every staged path (staged_new.txt `A `, both.txt `MM`) become the AI context.
+        assert_eq!(
+            effects,
+            vec![Effect::SuggestCommitMessage {
+                branch: "main".into(),
+                files: vec!["staged_new.txt".into(), "both.txt".into()],
+            }]
+        );
+        assert!(s.commit.as_ref().unwrap().busy);
+
+        // Streamed tokens accumulate into the buffer.
+        for delta in ["Add ", "staged ", "file"] {
+            update_status(
+                &mut s,
+                Event::CommitSuggestionChunk {
+                    delta: delta.into(),
+                },
+            );
+        }
+        assert_eq!(s.commit.as_ref().unwrap().message, "Add staged file");
+        // Ready settles the draft and clears busy.
+        update_status(
+            &mut s,
+            Event::CommitSuggestionReady {
+                text: "Add staged file".into(),
+            },
+        );
+        let editor = s.commit.as_ref().unwrap();
+        assert!(!editor.busy);
+        assert_eq!(editor.message, "Add staged file");
+    }
+
+    // CMT-06: while busy, typing is paused; a failure shows a hint and re-enables the field.
+    #[test]
+    fn cmt_06_busy_pauses_input_and_failure_is_inline() {
+        let mut s = app();
+        update_status(&mut s, ch('c'));
+        update_status(&mut s, ctrl('s')); // busy
+        // A keypress mid-stream is ignored.
+        update_status(&mut s, ch('x'));
+        assert_eq!(s.commit.as_ref().unwrap().message, "");
+        // Enter is ignored while busy (no commit fired).
+        assert_eq!(update_status(&mut s, key(KeyCode::Enter)), vec![]);
+        assert_eq!(s.mode, StatusMode::Commit);
+
+        update_status(
+            &mut s,
+            Event::CommitSuggestionFailed {
+                error: "ollama down".into(),
+            },
+        );
+        let editor = s.commit.as_ref().unwrap();
+        assert!(!editor.busy);
+        assert!(editor.hint.as_deref().unwrap().contains("ollama down"));
+        // The field is editable again.
+        update_status(&mut s, ch('x'));
+        assert_eq!(s.commit.as_ref().unwrap().message, "x");
+    }
+
+    // CMT-06: `s` is ALWAYS a literal character (even in a blank editor) — so a subject starting with
+    // "s" ("ship it") is typed, never hijacked. Only Ctrl-s suggests.
+    #[test]
+    fn cmt_06_bare_s_is_always_literal() {
+        let mut s = app();
+        update_status(&mut s, ch('c'));
+        // Blank editor: `s` types, does not suggest.
+        let effects = update_status(&mut s, ch('s'));
+        assert_eq!(effects, vec![], "bare s never triggers a suggestion");
+        drive(&mut s, vec![ch('h'), ch('i'), ch('p')]);
+        assert_eq!(s.commit.as_ref().unwrap().message, "ship");
+        assert!(!s.commit.as_ref().unwrap().busy);
+
+        // Ctrl-s regenerates regardless, clearing the buffer.
+        let effects = update_status(&mut s, ctrl('s'));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::SuggestCommitMessage { .. }]
+        ));
+        assert!(s.commit.as_ref().unwrap().message.is_empty());
+        assert!(s.commit.as_ref().unwrap().busy);
+    }
+
+    // CMT-08: Esc cancels the editor (→ List), making no commit; a second Esc then quits.
+    #[test]
+    fn cmt_08_esc_cancels_then_quits() {
+        let mut s = app();
+        update_status(&mut s, ch('c'));
+        drive(&mut s, vec![ch('h'), ch('i')]);
+        let effects = update_status(&mut s, key(KeyCode::Esc));
+        assert_eq!(effects, vec![], "cancel makes no commit");
+        assert_eq!(s.mode, StatusMode::List);
+        assert!(s.commit.is_none());
+        // From the base list, Esc now quits (universal exit).
+        let effects = update_status(&mut s, key(KeyCode::Esc));
+        assert!(s.should_quit);
+        assert_eq!(effects, vec![Effect::Quit]);
+    }
+
+    // Ctrl-c quits even from inside the commit editor.
+    #[test]
+    fn cmt_ctrl_c_quits_from_editor() {
+        let mut s = app();
+        update_status(&mut s, ch('c'));
+        let effects = update_status(&mut s, ctrl('c'));
+        assert!(s.should_quit);
+        assert_eq!(effects, vec![Effect::Quit]);
+    }
+
+    // A suggestion arriving after the editor was cancelled — and after a fresh editor was reopened —
+    // must not clobber the new draft (it only settles into the editor that's `busy` awaiting it).
+    #[test]
+    fn cmt_stale_suggestion_after_cancel_is_ignored() {
+        let mut s = app();
+        update_status(&mut s, ch('c'));
+        update_status(&mut s, ctrl('s')); // request a suggestion (busy)
+        update_status(&mut s, key(KeyCode::Esc)); // cancel: editor closed, generation orphaned
+        assert!(s.commit.is_none());
+
+        // Reopen a fresh editor and type a manual draft.
+        update_status(&mut s, ch('c'));
+        drive(&mut s, vec![ch('h'), ch('i')]);
+
+        // The orphaned generation finishes late — the fresh (non-busy) draft is untouched.
+        update_status(
+            &mut s,
+            Event::CommitSuggestionReady {
+                text: "stale".into(),
+            },
+        );
+        assert_eq!(s.commit.as_ref().unwrap().message, "hi");
     }
 
     // Empty tree: motions and actions are safe no-ops.

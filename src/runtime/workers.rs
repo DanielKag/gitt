@@ -4,7 +4,9 @@
 use std::sync::mpsc::Sender;
 use std::thread;
 
-use crate::domain::summary::{build_branch_prompt, build_prompt, strip_preamble};
+use crate::domain::summary::{
+    build_branch_prompt, build_commit_message_prompt, build_prompt, strip_preamble,
+};
 use crate::ports::{ColorMode, GitError, GitRepo, Ports, Summarizer, SummaryCache};
 use crate::state::{Effect, Event};
 
@@ -144,6 +146,22 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
         Effect::Discard { path, untracked } => {
             let git = ports.git.clone();
             mutation(tx, "Discarded", move || git.discard(&path, untracked));
+        }
+        Effect::LoadHeadMessage => {
+            let git = ports.git.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let result = git.head_message().map_err(|e| e.concise());
+                let _ = tx.send(Event::HeadMessageLoaded(result));
+            });
+        }
+        Effect::SuggestCommitMessage { branch, files } => {
+            let git = ports.git.clone();
+            let summarizer = ports.summarizer.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                suggest_commit_message(&*git, &*summarizer, &branch, &files, &tx)
+            });
         }
         Effect::LoadDiffFiles(scope) => {
             let git = ports.git.clone();
@@ -366,6 +384,51 @@ fn generate_branch_summary(
             }
         }
         Err(e) => fail(e.to_string()),
+    };
+    let _ = tx.send(event);
+}
+
+/// Fetch the staged diff, build the commit-message prompt (branch + staged files + bounded diff), and
+/// stream the model's drafted subject line back token-by-token (`CommitSuggestionChunk`), then emit
+/// `CommitSuggestionReady` with the cleaned result. Nothing is cached — a draft is ephemeral until the
+/// user commits. Any failure — including an empty completion — emits `CommitSuggestionFailed`.
+fn suggest_commit_message(
+    git: &dyn GitRepo,
+    summarizer: &dyn Summarizer,
+    branch: &str,
+    files: &[String],
+    tx: &Sender<Event>,
+) {
+    let diff = match git.staged_diff() {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = tx.send(Event::CommitSuggestionFailed {
+                error: e.to_string(),
+            });
+            return;
+        }
+    };
+    let prompt = build_commit_message_prompt(branch, files, &diff);
+
+    let mut acc = String::new();
+    let result = summarizer.summarize(&prompt, &mut |tok| {
+        acc.push_str(tok);
+        let _ = tx.send(Event::CommitSuggestionChunk {
+            delta: tok.to_string(),
+        });
+    });
+
+    let event = match result {
+        Ok(()) if acc.trim().is_empty() => Event::CommitSuggestionFailed {
+            error: "ollama returned an empty response".to_string(),
+        },
+        // Reuse the summary preamble-stripper so a "This commit …" lead-in is cleaned off the subject.
+        Ok(()) => Event::CommitSuggestionReady {
+            text: strip_preamble(acc.trim()),
+        },
+        Err(e) => Event::CommitSuggestionFailed {
+            error: e.to_string(),
+        },
     };
     let _ = tx.send(event);
 }

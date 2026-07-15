@@ -87,11 +87,19 @@ pub enum Event {
     FileDiffLoaded { path: String, text: String },
     /// A file's diff failed to load.
     FileDiffFailed { path: String, error: String },
-    /// A stage/unstage/discard mutation finished; the status view reloads afterward.
+    /// A stage/unstage/discard/commit mutation finished; the status view reloads afterward.
     StatusMutated {
         label: String,
         result: Result<(), String>,
     },
+    /// HEAD's message finished loading (the amend prefill), or an error (e.g. no commit yet).
+    HeadMessageLoaded(Result<String, String>),
+    /// A streamed token of an in-flight AI commit-message suggestion; appended to the editor buffer.
+    CommitSuggestionChunk { delta: String },
+    /// The AI commit-message suggestion finished (the full drafted subject line).
+    CommitSuggestionReady { text: String },
+    /// The AI commit-message suggestion failed.
+    CommitSuggestionFailed { error: String },
 
     // --- gitt diff -----------------------------------------------------------------------------
     /// A scope's changed-file list finished loading.

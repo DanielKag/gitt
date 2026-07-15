@@ -1,0 +1,16 @@
+---
+source: src/ui/status.rs
+expression: "render_to_string(&s, 80, 12)"
+---
+ feature (status)   4 changed · 2 staged
+A  src/status.rs
+ M src/reducer.rs
+MM src/ui/mod.rs
+?? notes.t┌ Commit ──────────────────────────────────────────────────┐
+          │ commit message…  (Ctrl-s: suggest with AI)               │
+          │ Enter  commit    Ctrl-s  suggest    Esc  cancel          │
+          └──────────────────────────────────────────────────────────┘
+
+
+
+j/k · space stage · c commit · a amend · d discard · Tab diff · Enter · q quit

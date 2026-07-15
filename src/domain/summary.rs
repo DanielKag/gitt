@@ -37,6 +37,15 @@ directly with a present-tense verb (e.g. \"Adds\", \"Fixes\", \"Refactors\") —
 tools, and version numbers in `backticks`. Reply with only the summary — no preamble, no headings, \
 no bullet points, no code fences.";
 
+/// System instruction for drafting a **new** commit message from the staged diff. Unlike the summary
+/// prompts (which describe an existing commit in the third person), this asks for a conventional
+/// commit *subject line*: imperative mood, one line, no trailing period.
+const COMMIT_SYSTEM: &str = "You are a senior software engineer writing a git commit message for a \
+set of staged changes. Reply with a SINGLE-LINE commit subject in the imperative mood (e.g. \"Add\", \
+\"Fix\", \"Refactor\") — no trailing period, under ~72 characters. Do NOT wrap it in quotes, add a \
+prefix like \"Subject:\", or write any body, explanation, or code fences. Reply with only the subject \
+line. You may use `backticks` around a file, path, or identifier if it sharpens the subject.";
+
 /// Resolve the Ollama model name from the `GITT_OLLAMA_MODEL` value (if any), falling back to the
 /// default. Blank/whitespace values fall back too.
 pub fn ollama_model(configured: Option<String>) -> String {
@@ -157,6 +166,27 @@ pub fn build_branch_prompt(base: &str, subjects: &[String], diff: &str) -> Strin
     };
     format!(
         "{BRANCH_SYSTEM}\n\nBase branch:\n{base}\n\nCommits on this branch:\n{commits}\n\nDiff vs base:\n{truncated}\n"
+    )
+}
+
+/// Build the full prompt for drafting a **new** commit message: the commit system instruction, the
+/// current branch name and the staged file paths (lightweight context that sharpens the subject
+/// without an extra git call), then the (bounded) staged diff. Pure, so it is tested against
+/// expectations; the port layer just pipes the result to the model. The branch name and file list are
+/// context only — the model is told to draft from the diff, not to echo them.
+pub fn build_commit_message_prompt(branch: &str, files: &[String], diff: &str) -> String {
+    let truncated = truncate_diff(diff, MAX_DIFF_LINES, MAX_DIFF_CHARS);
+    let file_list = if files.is_empty() {
+        "(none)".to_string()
+    } else {
+        files
+            .iter()
+            .map(|f| format!("- {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "{COMMIT_SYSTEM}\n\nCurrent branch:\n{branch}\n\nStaged files:\n{file_list}\n\nStaged diff:\n{truncated}\n"
     )
 }
 
@@ -306,6 +336,44 @@ mod tests {
             "Adds a feature."
         );
         assert_eq!(strip_preamble("The branch refactors X."), "Refactors X.");
+    }
+
+    // CMT-07: the commit-message prompt carries the imperative instruction, the branch name, the
+    // staged file list, and the staged diff (its context, minus other commits).
+    #[test]
+    fn cmt_07_commit_message_prompt_includes_context() {
+        let files = vec!["src/status.rs".to_string(), "specs/commit.md".to_string()];
+        let prompt = build_commit_message_prompt(
+            "feat/commit-editor",
+            &files,
+            "diff --git a/src/status.rs b/src/status.rs\n+let commit = 1;",
+        );
+        assert!(prompt.contains("imperative mood"), "commit instruction");
+        assert!(prompt.contains("Current branch:\nfeat/commit-editor"));
+        assert!(
+            prompt.contains("- src/status.rs") && prompt.contains("- specs/commit.md"),
+            "staged files listed"
+        );
+        assert!(prompt.contains("+let commit = 1;"), "staged diff body");
+        assert!(prompt.contains("Staged diff:"));
+    }
+
+    // CMT-07: with nothing staged, the file section reads "(none)" rather than being blank.
+    #[test]
+    fn cmt_07_commit_message_prompt_no_files() {
+        let prompt = build_commit_message_prompt("main", &[], "");
+        assert!(prompt.contains("Staged files:\n(none)"));
+    }
+
+    // CMT-07: a huge staged diff is bounded by the same truncation the summary prompt uses.
+    #[test]
+    fn cmt_07_commit_message_prompt_truncates_large_diffs() {
+        let big: String = (0..1000)
+            .map(|i| format!("+l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = build_commit_message_prompt("main", &["f".into()], &big);
+        assert!(prompt.contains("truncated"));
     }
 
     #[test]

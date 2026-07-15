@@ -83,6 +83,32 @@ impl TempRepo {
         out.lines().any(|l| l == rel)
     }
 
+    /// HEAD's commit subject (`git log -1 --pretty=%s`).
+    pub fn head_subject(&self) -> String {
+        git(self.work.path(), &["log", "-1", "--pretty=%s"], NOW)
+            .trim()
+            .to_string()
+    }
+
+    /// Number of commits reachable from HEAD (`git rev-list --count HEAD`).
+    pub fn commit_count(&self) -> usize {
+        git(self.work.path(), &["rev-list", "--count", "HEAD"], NOW)
+            .trim()
+            .parse()
+            .unwrap_or(0)
+    }
+
+    /// True if `rel` is committed at HEAD (`git ls-files` would list it; check via `git cat-file`).
+    pub fn is_tracked_at_head(&self, rel: &str) -> bool {
+        !git(
+            self.work.path(),
+            &["ls-tree", "HEAD", "--name-only", rel],
+            NOW,
+        )
+        .trim()
+        .is_empty()
+    }
+
     /// A repo with one committed file plus a dirty working tree covering the interesting states:
     /// a staged-new file (`A `), a modified-unstaged tracked file (` M`), and an untracked file
     /// (`??`). `git status` sorts by path, so the list order is deterministic:

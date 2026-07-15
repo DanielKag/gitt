@@ -27,6 +27,35 @@ pub enum StatusMode {
     Menu,
     /// The discard confirmation is open.
     Confirm,
+    /// The commit-message editor is open.
+    Commit,
+}
+
+/// The commit-message editor overlay (opened by `c`, or `a` for amend). Subject-only authoring: the
+/// message is one editable buffer (an amend prefill may carry a multi-line body, preserved verbatim);
+/// `Enter` commits, so newlines can't be typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitEditor {
+    /// The message being edited.
+    pub message: String,
+    /// Amend the previous commit rather than create a new one.
+    pub amend: bool,
+    /// True while an AI suggestion is streaming in, or the amend prefill is still loading — input is
+    /// paused so streamed tokens / the prefill can't interleave with typing.
+    pub busy: bool,
+    /// A transient sub-hint under the field (a suggestion error, or "nothing staged to commit").
+    pub hint: Option<String>,
+}
+
+impl CommitEditor {
+    pub fn new(amend: bool) -> Self {
+        CommitEditor {
+            message: String::new(),
+            amend,
+            busy: false,
+            hint: None,
+        }
+    }
 }
 
 /// State of the file diff-preview pane, keyed by path (each path is unique in the flat list).
@@ -87,6 +116,15 @@ pub struct ConfirmDiscard {
     pub untracked: bool,
 }
 
+/// A commit the user confirmed but that gitt runs in the *restored* terminal after it exits (so
+/// pre-commit hooks stream live and a failure is re-runnable). Set on Enter-to-commit alongside
+/// `should_quit`; the shell reads it once the event loop ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingCommit {
+    pub message: String,
+    pub amend: bool,
+}
+
 /// The whole `gitt status` screen state.
 #[derive(Debug, Clone)]
 pub struct StatusState {
@@ -105,6 +143,10 @@ pub struct StatusState {
     pub preview_scroll: u16,
     pub menu: Option<FileMenu>,
     pub confirm: Option<ConfirmDiscard>,
+    /// The open commit-message editor, if any.
+    pub commit: Option<CommitEditor>,
+    /// A confirmed commit to run in the restored terminal after the TUI exits (hooks stream live).
+    pub pending_commit: Option<PendingCommit>,
     /// Transient status-line message.
     pub status: Option<String>,
     pub branch: String,
@@ -126,6 +168,8 @@ impl StatusState {
             preview_scroll: 0,
             menu: None,
             confirm: None,
+            commit: None,
+            pending_commit: None,
             status: None,
             branch,
             size: (80, 24),

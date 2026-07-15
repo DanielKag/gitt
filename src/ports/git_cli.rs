@@ -191,6 +191,15 @@ impl GitRepo for RealGit {
         }
     }
 
+    fn head_message(&self) -> Result<String, GitError> {
+        self.run(&["log", "-1", "--pretty=%B"])
+            .map(|s| s.trim().to_string())
+    }
+
+    fn staged_diff(&self) -> Result<String, GitError> {
+        self.run(&["diff", "--no-color", "--staged", "-w"])
+    }
+
     fn diff_files(&self, scope: DiffScope) -> Result<Vec<DiffFile>, GitError> {
         let mut args: Vec<&str> = vec!["diff", "--name-status", "-z", "--no-color"];
         let revs = self.scope_revs(scope);

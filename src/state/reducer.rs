@@ -113,6 +113,10 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
         | Event::FileDiffLoaded { .. }
         | Event::FileDiffFailed { .. }
         | Event::StatusMutated { .. }
+        | Event::HeadMessageLoaded(_)
+        | Event::CommitSuggestionChunk { .. }
+        | Event::CommitSuggestionReady { .. }
+        | Event::CommitSuggestionFailed { .. }
         | Event::DiffFilesLoaded { .. }
         | Event::DiffFilesFailed { .. }
         | Event::DiffTextLoaded { .. }

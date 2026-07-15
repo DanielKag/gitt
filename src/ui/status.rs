@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
 
 use super::components::{self, dim_area, overlay_menu, preview_pane, truncate};
 use super::theme;
-use crate::domain::StatusEntry;
+use crate::domain::{StatusEntry, text};
 use crate::state::{FilePreview, StatusLoad, StatusMode, StatusState};
 
 /// Render the whole status UI for the current state.
@@ -30,12 +30,13 @@ pub fn draw_status(frame: &mut Frame, state: &StatusState) {
     render_status(frame, chunks[2], state);
 
     match state.mode {
-        StatusMode::Menu | StatusMode::Confirm => dim_area(frame, area),
+        StatusMode::Menu | StatusMode::Confirm | StatusMode::Commit => dim_area(frame, area),
         StatusMode::List => {}
     }
     match state.mode {
         StatusMode::Menu => render_menu(frame, chunks[1], state),
         StatusMode::Confirm => render_confirm(frame, chunks[1], state),
+        StatusMode::Commit => render_commit(frame, chunks[1], state),
         StatusMode::List => {}
     }
 }
@@ -152,8 +153,7 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &StatusState) {
 
 fn render_status(frame: &mut Frame, area: Rect, state: &StatusState) {
     let text = state.status.clone().unwrap_or_else(|| {
-        "j/k move · space stage/unstage · d discard · Tab diff · Enter actions · R reload · q quit"
-            .to_string()
+        "j/k · space stage · c commit · a amend · d discard · Tab diff · Enter · q quit".to_string()
     });
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
@@ -192,6 +192,71 @@ fn render_confirm(frame: &mut Frame, body: Rect, state: &StatusState) {
     );
 }
 
+/// The commit-message editor overlay (`c` / `a`). A centered, bordered box — same chrome as the
+/// discard confirmation and the branch create-input — showing the message (or a placeholder /
+/// streaming spinner), an optional inline hint, and the keymap.
+fn render_commit(frame: &mut Frame, body: Rect, state: &StatusState) {
+    let Some(editor) = &state.commit else {
+        return;
+    };
+
+    let inner_w = 58usize.min(body.width.saturating_sub(2).max(10) as usize);
+    let empty = editor.message.is_empty();
+
+    // The message line(s): a spinner/placeholder while empty, else the text with a block cursor.
+    let msg_lines: Vec<Line> = if editor.busy && empty {
+        let label = if editor.amend {
+            "loading previous message…"
+        } else {
+            "suggesting with ollama…"
+        };
+        vec![Line::styled(format!(" {label}"), theme::dim())]
+    } else if empty {
+        vec![Line::styled(
+            " commit message…  (Ctrl-s: suggest with AI)",
+            theme::dim(),
+        )]
+    } else {
+        // While a suggestion is still streaming, a slim `▌` marks the live caret; a settled draft
+        // gets the usual block cursor.
+        let cursor = if editor.busy { "▌" } else { "█" };
+        let mut wrapped = text::wrap_words(&editor.message, inner_w);
+        if wrapped.is_empty() {
+            wrapped.push(String::new());
+        }
+        let last = wrapped.len() - 1;
+        wrapped[last].push_str(cursor);
+        wrapped
+            .into_iter()
+            .map(|l| Line::styled(format!(" {l}"), theme::subject()))
+            .collect()
+    };
+
+    let verb = if editor.amend { "amend" } else { "commit" };
+    let mut lines = msg_lines;
+    if let Some(hint) = &editor.hint {
+        lines.push(Line::styled(format!(" {hint}"), theme::error()));
+    }
+    lines.push(Line::styled(
+        format!(" Enter  {verb}    Ctrl-s  suggest    Esc  cancel"),
+        theme::dim(),
+    ));
+
+    let title = if editor.amend {
+        " Amend commit "
+    } else {
+        " Commit "
+    };
+    let height = lines.len() as u16 + 2;
+    let width = (inner_w as u16 + 2).max(title.len() as u16 + 4);
+    let area = components::centered_rect(body, width, height);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::bordered().title(title)),
+        area,
+    );
+}
+
 /// Render `state` into a fresh `TestBackend` and return the screen as trimmed text lines.
 #[cfg(test)]
 pub fn render_to_string(state: &StatusState, width: u16, height: u16) -> String {
@@ -217,7 +282,7 @@ pub fn render_to_string(state: &StatusState, width: u16, height: u16) -> String 
 mod tests {
     use super::*;
     use crate::domain::StatusEntry;
-    use crate::state::{ConfirmDiscard, FileAction, FileMenu};
+    use crate::state::{CommitEditor, ConfirmDiscard, FileAction, FileMenu};
 
     fn entry(index: char, worktree: char, path: &str) -> StatusEntry {
         StatusEntry {
@@ -303,6 +368,48 @@ mod tests {
         s.size = (80, 8);
         s.load = StatusLoad::Loading;
         insta::assert_snapshot!(render_to_string(&s, 80, 8));
+    }
+
+    // CMT-01: an empty commit editor shows the placeholder + suggest hint.
+    #[test]
+    fn cmt_01_commit_editor_empty_snapshot() {
+        let mut s = app();
+        s.mode = StatusMode::Commit;
+        s.commit = Some(CommitEditor::new(false));
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // CMT-03: a commit editor with a typed message shows it with a cursor.
+    #[test]
+    fn cmt_03_commit_editor_typed_snapshot() {
+        let mut s = app();
+        s.mode = StatusMode::Commit;
+        let mut editor = CommitEditor::new(false);
+        editor.message = "Add the commit editor".into();
+        s.commit = Some(editor);
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // CMT-05: the amend editor is titled differently and prefilled.
+    #[test]
+    fn cmt_05_amend_editor_snapshot() {
+        let mut s = app();
+        s.mode = StatusMode::Commit;
+        let mut editor = CommitEditor::new(true);
+        editor.message = "base".into();
+        s.commit = Some(editor);
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // CMT-06: a suggestion in flight shows the spinner; a failure shows the inline hint.
+    #[test]
+    fn cmt_06_commit_editor_suggesting_snapshot() {
+        let mut s = app();
+        s.mode = StatusMode::Commit;
+        let mut editor = CommitEditor::new(false);
+        editor.busy = true;
+        s.commit = Some(editor);
+        insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 
     // A style assertion: selected row is reversed, consistent with the log list.

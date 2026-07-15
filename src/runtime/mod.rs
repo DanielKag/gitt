@@ -43,6 +43,20 @@ pub trait Screen {
     fn exit_report(&self) -> Option<String> {
         None
     }
+    /// A command to run in the **restored** terminal after the screen exits, with inherited stdio so
+    /// its progress is visible and it's re-runnable — used for `gitt status`'s commit, which hands off
+    /// to `git commit` in the shell so pre-commit hooks stream live. `None` = exit normally.
+    fn exit_command(&self) -> Option<ExitCommand> {
+        None
+    }
+}
+
+/// A command gitt runs after tearing down the TUI, in the plain terminal (see [`Screen::exit_command`]).
+pub struct ExitCommand {
+    pub program: String,
+    pub args: Vec<String>,
+    /// A copy-pasteable, shell-quoted line printed before the command runs.
+    pub display: String,
 }
 
 impl Screen for AppState {
@@ -73,6 +87,18 @@ impl Screen for StatusState {
     fn init_effects(&mut self) -> Vec<Effect> {
         self.load = StatusLoad::Loading;
         vec![Effect::LoadStatus]
+    }
+    fn exit_command(&self) -> Option<ExitCommand> {
+        // On Enter-to-commit the reducer records a `PendingCommit` and quits; we run the actual
+        // `git commit` here, in the restored terminal, so hooks stream live and a failure is visible.
+        self.pending_commit.as_ref().map(|pc| {
+            let inv = crate::domain::commit_command(&pc.message, pc.amend);
+            ExitCommand {
+                program: "git".to_string(),
+                args: inv.args,
+                display: inv.display,
+            }
+        })
     }
 }
 
@@ -167,7 +193,37 @@ pub fn run<S: Screen>(mut screen: S, ports: Ports) -> Result<()> {
 
     // Leave a clean, git-native footprint for an inline screen (erase the UI, print a one-line
     // report, drop to a fresh prompt). Fullscreen screens restore themselves via the alternate screen.
+    let exit_cmd = screen.exit_command();
     guard.finish_inline(screen.exit_report())?;
+    // Restore the terminal (leave raw mode / the alternate screen) BEFORE running any deferred
+    // command, so its output lands on the normal terminal, not the torn-down TUI.
+    drop(guard);
+
+    if let Some(cmd) = exit_cmd {
+        run_exit_command(cmd);
+    }
 
     Ok(())
+}
+
+/// Run a deferred [`ExitCommand`] in the (now restored) terminal: echo the command, run it with
+/// inherited stdio so its output — including pre-commit hook progress — streams live, then exit with
+/// its status code so a failing commit is reflected in `$?` and the user can simply re-run the printed
+/// line. Diverges (never returns) — it's the last thing gitt does.
+fn run_exit_command(cmd: ExitCommand) -> ! {
+    use std::io::Write;
+    use std::process::Command;
+
+    println!("$ {}", cmd.display);
+    let _ = std::io::stdout().flush();
+
+    let code = Command::new(&cmd.program)
+        .args(&cmd.args)
+        .status()
+        .map(|s| s.code().unwrap_or(1))
+        .unwrap_or_else(|e| {
+            eprintln!("gitt: failed to run {}: {e}", cmd.program);
+            1
+        });
+    std::process::exit(code);
 }

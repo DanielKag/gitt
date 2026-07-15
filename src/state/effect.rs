@@ -53,6 +53,16 @@ pub enum Effect {
     /// Discard a file's changes (`git restore` for tracked, delete for untracked).
     Discard { path: String, untracked: bool },
 
+    // --- gitt commit ---------------------------------------------------------------------------
+    // The commit itself is NOT an effect: it runs in the restored terminal after the TUI exits (see
+    // `state::PendingCommit` / `runtime::run`), so pre-commit hooks stream live and a failure is
+    // re-runnable. Only the read-only support below runs on a worker.
+    /// Load HEAD's commit message to prefill the amend editor (`git log -1 --pretty=%B`).
+    LoadHeadMessage,
+    /// Draft an AI commit-message suggestion from the staged diff (+ branch/file context), streaming
+    /// it back token-by-token into the open commit editor.
+    SuggestCommitMessage { branch: String, files: Vec<String> },
+
     // --- gitt branch ---------------------------------------------------------------------------
     /// Load (or reload) the local branch list.
     LoadBranches,

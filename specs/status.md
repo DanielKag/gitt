@@ -10,8 +10,8 @@
 git would report in `git status`, each shown with a two-letter `XY` status badge (index + worktree,
 e.g. `M `, ` M`, `MM`, `A `, `??`, ` D`). The user browses files with the same vim motions as
 `gitt log`, stages/unstages a file with a single key, previews the diff of the selected file in a pane
-below the list (reusing the shared colorized preview), and discards a file's changes behind a confirmation. It is the staging
-half of a commit workflow (committing itself is a later feature). Every stage/unstage/discard re-reads
+below the list (reusing the shared colorized preview), and discards a file's changes behind a confirmation. It is the
+working-tree cockpit: staging plus committing (`c` / `a` — see `specs/commit.md`). Every stage/unstage/discard/commit re-reads
 real git state so the view never drifts from reality. By design it **looks and behaves like
 `gitt log`** — same theme, same list/overlay/help-bar components, same navigation, preview, and quit
 keys — so the two commands feel like one tool.
@@ -48,6 +48,7 @@ keys — so the two commands feel like one tool.
 | `Ctrl-f`/`Ctrl-b`  | List    | Page down / up                                                |
 | `Space`            | List    | Toggle staging of selected file (stage if dirty, else unstage)|
 | `s` / `u`          | List    | Stage / unstage selected file (section-independent)           |
+| `c` / `a`          | List    | Commit / amend the staged changes (see `specs/commit.md`)     |
 | `d`                | List    | Discard selected file's changes (opens confirmation)          |
 | `Tab`              | List    | Toggle diff preview for the selected file                     |
 | `R`                | List    | Reload status                                                 |
@@ -84,7 +85,8 @@ base list), `q`/`Ctrl-c` (quit)._
 ## Out of scope (for this POC)
 
 - Partial / hunk-level or line-level staging (whole-file staging only).
-- Creating a commit, amend, push (this feature only stages; committing is a separate spec).
+- push / pull / fetch and history-rewriting ops (rebase/merge/conflicts) — refused by design.
+  (Commit & amend are delivered — see `specs/commit.md`.)
 - Fuzzy file filtering with `/` (the shared fuzzy component is available; deferred to keep scope tight).
 - Multi-select / bulk stage-all.
 - (Delivered) Syntax-highlighted / tool-colored diffs — now via the shared configurable diff tool

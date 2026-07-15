@@ -12,7 +12,7 @@ pub mod time;
 pub mod url;
 
 pub use branch::{Branch, PrStatus};
-pub use commit::{Commit, Ref, View};
+pub use commit::{Commit, CommitInvocation, Ref, View, commit_command};
 pub use diff::{DiffFile, DiffScope};
 pub use diff_tool::DiffTool;
 pub use status::{DiffKind, StatusEntry};
