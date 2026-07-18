@@ -24,6 +24,10 @@ pub struct Tui {
     _pair: PtyPair,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     parser: Arc<Mutex<vt100::Parser>>,
+    /// Every byte gitt wrote to the PTY, in order — lets teardown-hygiene tests assert on the exact
+    /// control sequences (e.g. an SGR reset after leaving the alternate screen), which the parsed
+    /// grid can't show.
+    raw: Arc<Mutex<Vec<u8>>>,
     child: Box<dyn Child + Send + Sync>,
     _home: TempDir,
     sink: TempDir,
@@ -87,9 +91,11 @@ impl Tui {
             Arc::new(Mutex::new(pair.master.take_writer().unwrap()));
 
         let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
+        let raw = Arc::new(Mutex::new(Vec::<u8>::new()));
         {
             let parser = parser.clone();
             let writer = writer.clone();
+            let raw = raw.clone();
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 loop {
@@ -97,6 +103,7 @@ impl Tui {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
                             let chunk = &buf[..n];
+                            raw.lock().unwrap().extend_from_slice(chunk);
                             parser.lock().unwrap().process(chunk);
                             // Answer a Device Status Report (cursor position) query, `ESC[6n`, with
                             // the current cursor position — a real terminal always does. Inline
@@ -118,6 +125,7 @@ impl Tui {
             _pair: pair,
             writer,
             parser,
+            raw,
             child,
             _home: home,
             sink,
@@ -196,6 +204,35 @@ impl Tui {
             .unwrap_or_default()
             .trim()
             .to_string()
+    }
+
+    /// Assert gitt left the terminal pen clean on teardown: after it restored the primary screen
+    /// (left the alternate buffer) it must emit a full SGR reset, otherwise the last frame's
+    /// `DIM`/`REVERSED`/color pen bleeds into the shell prompt (stray blocks / underlines). Polls the
+    /// captured raw byte stream so it's robust to the final teardown bytes still being in flight.
+    pub fn assert_pen_reset_on_teardown(&self) {
+        const LEAVE_ALT: &[u8] = b"\x1b[?1049l";
+        const RESET: &[u8] = b"\x1b[0m";
+        let start = Instant::now();
+        loop {
+            let raw = self.raw.lock().unwrap().clone();
+            if let Some(pos) = raw.windows(LEAVE_ALT.len()).rposition(|w| w == LEAVE_ALT) {
+                // Only the bytes emitted after the primary screen was restored count — a reset while
+                // still in the alternate buffer wouldn't fix the leaked pen.
+                if raw[pos..].windows(RESET.len()).any(|w| w == RESET) {
+                    return;
+                }
+            }
+            if start.elapsed() > TIMEOUT {
+                let tail_start = raw.len().saturating_sub(64);
+                panic!(
+                    "no SGR reset (\\x1b[0m) after leaving the alternate screen — the terminal pen \
+                     leaks into the shell prompt.\n--- raw teardown tail ---\n{:?}",
+                    String::from_utf8_lossy(&raw[tail_start..])
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Wait for the process to exit; panic on timeout.

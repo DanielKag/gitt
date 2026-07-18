@@ -12,7 +12,7 @@ use std::io::{self, Stdout};
 use anyhow::Result;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
-use crossterm::style::Print;
+use crossterm::style::{Attribute, Print, SetAttribute};
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -67,9 +67,15 @@ impl TerminalGuard {
         }
         let top = self.terminal.get_frame().area().y;
         let mut stdout = io::stdout();
-        // Wipe everything from the viewport's top row down — the TUI's whole footprint — and leave the
-        // cursor there so the shell prompt (or our report) continues exactly where output would.
-        execute!(stdout, MoveTo(0, top), Clear(ClearType::FromCursorDown))?;
+        // Wipe everything from the viewport's top row down — the TUI's whole footprint — and reset the
+        // pen so the last frame's DIM/REVERSED/color style can't bleed into the report or the shell
+        // prompt. Leave the cursor at the top row so the prompt (or our report) continues there.
+        execute!(
+            stdout,
+            SetAttribute(Attribute::Reset),
+            MoveTo(0, top),
+            Clear(ClearType::FromCursorDown)
+        )?;
         if let Some(msg) = report.filter(|m| !m.is_empty()) {
             // Raw mode is still on, so translate the newline explicitly.
             execute!(stdout, Print(msg), Print("\r\n"))?;
@@ -84,6 +90,10 @@ impl Drop for TerminalGuard {
         if self.alternate {
             let _ = execute!(io::stdout(), LeaveAlternateScreen);
         }
+        // Reset the pen on the *restored* primary screen (after leaving the alternate buffer, since
+        // terminals share one SGR pen across buffers): the last frame's DIM/REVERSED/color style must
+        // not leak into whatever the shell prints next — a native git command leaves no such trace.
+        let _ = execute!(io::stdout(), SetAttribute(Attribute::Reset));
         let _ = self.terminal.show_cursor();
     }
 }

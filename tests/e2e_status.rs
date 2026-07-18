@@ -27,6 +27,22 @@ fn stat_01_13_renders_files_and_quits() {
     tui.wait_exit();
 }
 
+// STAT-16 (regression): quitting must leave the terminal exactly as native git would — no leaked
+// pen. The last frame renders the list with a REVERSED selected row (and, on the commit path, a
+// full-screen DIM overlay); without an SGR reset on teardown that style bleeds into the shell prompt
+// as stray colored blocks / underlines until the window is closed.
+#[test]
+fn stat_16_quit_resets_terminal_pen() {
+    let repo = TempRepo::with_dirty();
+    let mut tui = spawn(repo.path());
+    tui.wait_for("newstaged.txt");
+
+    tui.send_str("q");
+    tui.wait_exit();
+
+    tui.assert_pen_reset_on_teardown();
+}
+
 // STAT-04: Space stages a modified file (badge flips), and again unstages it — real index changes.
 #[test]
 fn stat_04_space_stages_and_unstages() {
