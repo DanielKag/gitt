@@ -52,6 +52,12 @@ pub enum Effect {
     Unstage(String),
     /// Discard a file's changes (`git restore` for tracked, delete for untracked).
     Discard { path: String, untracked: bool },
+    /// Stage all files (`git add -A`).
+    StageAll,
+    /// Unstage all files (`git restore --staged .`).
+    UnstageAll,
+    /// Discard all changes: reset staged, restore tracked, clean untracked.
+    DiscardAll,
 
     // --- gitt commit ---------------------------------------------------------------------------
     // The commit itself is NOT an effect: it runs in the restored terminal after the TUI exits (see

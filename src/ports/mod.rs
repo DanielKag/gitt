@@ -75,6 +75,12 @@ pub trait GitRepo: Send + Sync {
     fn unstage(&self, path: &str) -> Result<(), GitError>;
     /// Discard a file's changes: restore a tracked file, or delete an untracked one.
     fn discard(&self, path: &str, untracked: bool) -> Result<(), GitError>;
+    /// Stage all files (`git add -A`).
+    fn stage_all(&self) -> Result<(), GitError>;
+    /// Unstage all files (`git restore --staged .`).
+    fn unstage_all(&self) -> Result<(), GitError>;
+    /// Discard all changes: reset index, restore tracked files, clean untracked.
+    fn discard_all(&self) -> Result<(), GitError>;
 
     // --- gitt commit -------------------------------------------------------------------------------
     // The commit itself is not a port method: it runs in the restored terminal after the TUI exits

@@ -111,9 +111,11 @@ impl FileMenu {
 
 /// The pending discard confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfirmDiscard {
-    pub path: String,
-    pub untracked: bool,
+pub enum ConfirmDiscard {
+    /// Discard a single file.
+    File { path: String, untracked: bool },
+    /// Discard all changes (reset staged, restore tracked, clean untracked).
+    All,
 }
 
 /// A commit the user confirmed but that gitt runs in the *restored* terminal after it exits (so

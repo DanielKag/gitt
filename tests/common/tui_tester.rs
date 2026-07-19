@@ -206,10 +206,9 @@ impl Tui {
             .to_string()
     }
 
-    /// Assert gitt left the terminal pen clean on teardown: after it restored the primary screen
-    /// (left the alternate buffer) it must emit a full SGR reset, otherwise the last frame's
-    /// `DIM`/`REVERSED`/color pen bleeds into the shell prompt (stray blocks / underlines). Polls the
-    /// captured raw byte stream so it's robust to the final teardown bytes still being in flight.
+    /// Assert gitt left the terminal pen clean on teardown. For fullscreen screens, checks for
+    /// `\x1b[0m` (SGR reset) after the last `\x1b[?1049l` (leave alternate screen). For inline
+    /// screens (no alternate screen), checks that a reset appears in the final bytes of output.
     pub fn assert_pen_reset_on_teardown(&self) {
         const LEAVE_ALT: &[u8] = b"\x1b[?1049l";
         const RESET: &[u8] = b"\x1b[0m";
@@ -217,17 +216,21 @@ impl Tui {
         loop {
             let raw = self.raw.lock().unwrap().clone();
             if let Some(pos) = raw.windows(LEAVE_ALT.len()).rposition(|w| w == LEAVE_ALT) {
-                // Only the bytes emitted after the primary screen was restored count — a reset while
-                // still in the alternate buffer wouldn't fix the leaked pen.
                 if raw[pos..].windows(RESET.len()).any(|w| w == RESET) {
+                    return;
+                }
+            } else {
+                // Inline viewport (no alternate screen): just check for a reset in the tail.
+                let tail_start = raw.len().saturating_sub(128);
+                if raw[tail_start..].windows(RESET.len()).any(|w| w == RESET) {
                     return;
                 }
             }
             if start.elapsed() > TIMEOUT {
                 let tail_start = raw.len().saturating_sub(64);
                 panic!(
-                    "no SGR reset (\\x1b[0m) after leaving the alternate screen — the terminal pen \
-                     leaks into the shell prompt.\n--- raw teardown tail ---\n{:?}",
+                    "no SGR reset (\\x1b[0m) on teardown — the terminal pen leaks into the shell \
+                     prompt.\n--- raw teardown tail ---\n{:?}",
                     String::from_utf8_lossy(&raw[tail_start..])
                 );
             }

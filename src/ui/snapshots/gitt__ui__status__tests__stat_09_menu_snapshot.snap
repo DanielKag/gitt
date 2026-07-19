@@ -1,5 +1,6 @@
 ---
 source: src/ui/status.rs
+assertion_line: 347
 expression: "render_to_string(&s, 80, 12)"
 ---
  feature (status)   4 changed · 2 staged
@@ -13,4 +14,4 @@ MM src/ui/mod.rs              ┌ src/reducer.rs ──┐
 
 
 
-j/k · space stage · c commit · a amend · d discard · Tab diff · Enter · q quit
+j/k · space stage · S/U all · c commit · a amend · d/D discard · Tab diff · q qu

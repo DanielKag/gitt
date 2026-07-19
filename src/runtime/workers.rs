@@ -147,6 +147,18 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
             let git = ports.git.clone();
             mutation(tx, "Discarded", move || git.discard(&path, untracked));
         }
+        Effect::StageAll => {
+            let git = ports.git.clone();
+            mutation(tx, "Staged all", move || git.stage_all());
+        }
+        Effect::UnstageAll => {
+            let git = ports.git.clone();
+            mutation(tx, "Unstaged all", move || git.unstage_all());
+        }
+        Effect::DiscardAll => {
+            let git = ports.git.clone();
+            mutation(tx, "Discarded all", move || git.discard_all());
+        }
         Effect::LoadHeadMessage => {
             let git = ports.git.clone();
             let tx = tx.clone();

@@ -8,7 +8,7 @@
 use crate::domain::status::StatusEntry;
 
 /// The `git status` invocation whose output [`parse_status`] expects.
-pub const STATUS_ARGS: &[&str] = &["status", "--porcelain=v1", "-z"];
+pub const STATUS_ARGS: &[&str] = &["status", "--porcelain=v1", "-z", "-uall"];
 
 /// Parse raw `git status --porcelain=v1 -z` output into entries, in git's reported order.
 pub fn parse_status(raw: &str) -> Vec<StatusEntry> {

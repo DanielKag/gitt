@@ -74,6 +74,9 @@ impl Screen for AppState {
     }
 }
 
+/// Height of the small inline window `gitt status` runs in.
+const STATUS_VIEWPORT_ROWS: u16 = 20;
+
 impl Screen for StatusState {
     fn update(&mut self, event: Event) -> Vec<Effect> {
         crate::state::update_status(self, event)
@@ -87,6 +90,12 @@ impl Screen for StatusState {
     fn init_effects(&mut self) -> Vec<Effect> {
         self.load = StatusLoad::Loading;
         vec![Effect::LoadStatus]
+    }
+    fn viewport_height(&self) -> Option<u16> {
+        Some(STATUS_VIEWPORT_ROWS)
+    }
+    fn exit_report(&self) -> Option<String> {
+        self.status.clone()
     }
     fn exit_command(&self) -> Option<ExitCommand> {
         // On Enter-to-commit the reducer records a `PendingCommit` and quits; we run the actual

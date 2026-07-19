@@ -191,6 +191,21 @@ impl GitRepo for RealGit {
         }
     }
 
+    fn stage_all(&self) -> Result<(), GitError> {
+        self.run(&["add", "-A"]).map(|_| ())
+    }
+
+    fn unstage_all(&self) -> Result<(), GitError> {
+        self.run(&["reset", "HEAD", "--quiet"]).map(|_| ())
+    }
+
+    fn discard_all(&self) -> Result<(), GitError> {
+        // Reset index, restore tracked files, clean untracked files and directories.
+        self.run(&["reset", "HEAD", "--quiet"])?;
+        self.run(&["checkout", "--", "."])?;
+        self.run(&["clean", "-fd"]).map(|_| ())
+    }
+
     fn head_message(&self) -> Result<String, GitError> {
         self.run(&["log", "-1", "--pretty=%B"])
             .map(|s| s.trim().to_string())

@@ -155,6 +155,9 @@ fn on_key_list(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('u') => unstage_selected(state),
         KeyCode::Char('c') => open_commit(state),
         KeyCode::Char('a') => open_amend(state),
+        KeyCode::Char('S') => stage_all(state),
+        KeyCode::Char('U') => unstage_all(state),
+        KeyCode::Char('D') => open_confirm_all(state),
         KeyCode::Char('d') => open_confirm(state),
         KeyCode::Enter => open_menu(state),
         _ => vec![],
@@ -164,12 +167,16 @@ fn on_key_list(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
 /// The commit-message editor keymap. Input is paused while `busy` (a suggestion streaming or the amend
 /// prefill loading) so it can't interleave with typing; only Esc/Ctrl-c get through.
 ///
-/// AI suggestion is bound to `Ctrl-s`, NOT bare `s`: the editor is a free-text field, and a great many
-/// commit subjects start with "s" ("ship", "start", "support"…) — a bare-`s` command would hijack
-/// them. `Ctrl-s` is collision-free (raw mode clears flow control) and reads as "suggest".
+/// AI suggestion is bound to `S` (Shift+S) when the message buffer is empty — once the user starts
+/// typing, `S` becomes a regular character. This avoids hijacking typed text while keeping the
+/// suggest shortcut easy to reach.
 fn on_key_commit(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    if ctrl && key.code == KeyCode::Char('s') {
+    // S (Shift+S) triggers AI suggestion only when the buffer is empty.
+    if key.code == KeyCode::Char('S')
+        && !ctrl
+        && state.commit.as_ref().is_some_and(|e| e.message.is_empty())
+    {
         return suggest_commit_message(state);
     }
     match key.code {
@@ -420,7 +427,7 @@ fn suggest_commit_message(state: &mut StatusState) -> Vec<Effect> {
 
 fn open_confirm(state: &mut StatusState) -> Vec<Effect> {
     if let Some(entry) = state.selected() {
-        state.confirm = Some(ConfirmDiscard {
+        state.confirm = Some(ConfirmDiscard::File {
             path: entry.path.clone(),
             untracked: entry.is_untracked(),
         });
@@ -429,18 +436,44 @@ fn open_confirm(state: &mut StatusState) -> Vec<Effect> {
     vec![]
 }
 
+fn open_confirm_all(state: &mut StatusState) -> Vec<Effect> {
+    if state.entries().is_empty() {
+        return vec![];
+    }
+    state.confirm = Some(ConfirmDiscard::All);
+    state.mode = StatusMode::Confirm;
+    vec![]
+}
+
 fn confirm_discard(state: &mut StatusState) -> Vec<Effect> {
     state.mode = StatusMode::List;
     match state.confirm.take() {
-        Some(c) => {
-            state.status = Some(format!("Discarding {}…", c.path));
-            vec![Effect::Discard {
-                path: c.path,
-                untracked: c.untracked,
-            }]
+        Some(ConfirmDiscard::File { path, untracked }) => {
+            state.status = Some(format!("Discarding {path}…"));
+            vec![Effect::Discard { path, untracked }]
+        }
+        Some(ConfirmDiscard::All) => {
+            state.status = Some("Discarding all…".to_string());
+            vec![Effect::DiscardAll]
         }
         None => vec![],
     }
+}
+
+fn stage_all(state: &mut StatusState) -> Vec<Effect> {
+    if state.entries().is_empty() {
+        return vec![];
+    }
+    state.status = Some("Staging all…".to_string());
+    vec![Effect::StageAll]
+}
+
+fn unstage_all(state: &mut StatusState) -> Vec<Effect> {
+    if state.entries().is_empty() {
+        return vec![];
+    }
+    state.status = Some("Unstaging all…".to_string());
+    vec![Effect::UnstageAll]
 }
 
 fn open_menu(state: &mut StatusState) -> Vec<Effect> {
@@ -490,7 +523,7 @@ fn execute_menu(state: &mut StatusState) -> Vec<Effect> {
         }
         FileAction::Discard => {
             // Route through the mandatory confirmation overlay.
-            state.confirm = Some(ConfirmDiscard {
+            state.confirm = Some(ConfirmDiscard::File {
                 path,
                 untracked: menu.untracked,
             });
@@ -636,8 +669,10 @@ mod tests {
         drive(&mut s, vec![ch('G')]); // untracked.txt
         update_status(&mut s, ch('d'));
         assert_eq!(s.mode, StatusMode::Confirm);
-        assert_eq!(s.confirm.as_ref().unwrap().path, "untracked.txt");
-        assert!(s.confirm.as_ref().unwrap().untracked);
+        assert!(matches!(
+            s.confirm.as_ref().unwrap(),
+            ConfirmDiscard::File { path, untracked: true } if path == "untracked.txt"
+        ));
 
         let effects = update_status(&mut s, ch('y'));
         assert_eq!(
@@ -926,12 +961,12 @@ mod tests {
         assert!(editor.hint.as_deref().unwrap().contains("cannot amend"));
     }
 
-    // CMT-06/07: `Ctrl-s` drafts a suggestion; chunks stream in; Ready settles it.
+    // CMT-06/07: `S` (empty buffer) drafts a suggestion; chunks stream in; Ready settles it.
     #[test]
-    fn cmt_06_ctrl_s_suggests_and_streams() {
+    fn cmt_06_shift_s_suggests_and_streams() {
         let mut s = app();
         update_status(&mut s, ch('c'));
-        let effects = update_status(&mut s, ctrl('s'));
+        let effects = update_status(&mut s, ch('S'));
         // Branch + every staged path (staged_new.txt `A `, both.txt `MM`) become the AI context.
         assert_eq!(
             effects,
@@ -969,7 +1004,7 @@ mod tests {
     fn cmt_06_busy_pauses_input_and_failure_is_inline() {
         let mut s = app();
         update_status(&mut s, ch('c'));
-        update_status(&mut s, ctrl('s')); // busy
+        update_status(&mut s, ch('S')); // busy (empty buffer → suggest)
         // A keypress mid-stream is ignored.
         update_status(&mut s, ch('x'));
         assert_eq!(s.commit.as_ref().unwrap().message, "");
@@ -991,27 +1026,23 @@ mod tests {
         assert_eq!(s.commit.as_ref().unwrap().message, "x");
     }
 
-    // CMT-06: `s` is ALWAYS a literal character (even in a blank editor) — so a subject starting with
-    // "s" ("ship it") is typed, never hijacked. Only Ctrl-s suggests.
+    // CMT-06: lowercase `s` always types a literal. `S` triggers suggest only when the buffer is
+    // empty; once text is present, `S` types the letter.
     #[test]
-    fn cmt_06_bare_s_is_always_literal() {
+    fn cmt_06_s_keybinding_behavior() {
         let mut s = app();
         update_status(&mut s, ch('c'));
-        // Blank editor: `s` types, does not suggest.
+        // Blank editor: lowercase `s` types, does not suggest.
         let effects = update_status(&mut s, ch('s'));
         assert_eq!(effects, vec![], "bare s never triggers a suggestion");
         drive(&mut s, vec![ch('h'), ch('i'), ch('p')]);
         assert_eq!(s.commit.as_ref().unwrap().message, "ship");
         assert!(!s.commit.as_ref().unwrap().busy);
 
-        // Ctrl-s regenerates regardless, clearing the buffer.
-        let effects = update_status(&mut s, ctrl('s'));
-        assert!(matches!(
-            effects.as_slice(),
-            [Effect::SuggestCommitMessage { .. }]
-        ));
-        assert!(s.commit.as_ref().unwrap().message.is_empty());
-        assert!(s.commit.as_ref().unwrap().busy);
+        // `S` on a non-empty buffer types the character instead of suggesting.
+        let effects = update_status(&mut s, ch('S'));
+        assert_eq!(effects, vec![], "S with text types, doesn't suggest");
+        assert_eq!(s.commit.as_ref().unwrap().message, "shipS");
     }
 
     // CMT-08: Esc cancels the editor (→ List), making no commit; a second Esc then quits.
@@ -1046,7 +1077,7 @@ mod tests {
     fn cmt_stale_suggestion_after_cancel_is_ignored() {
         let mut s = app();
         update_status(&mut s, ch('c'));
-        update_status(&mut s, ctrl('s')); // request a suggestion (busy)
+        update_status(&mut s, ch('S')); // request a suggestion (empty → busy)
         update_status(&mut s, key(KeyCode::Esc)); // cancel: editor closed, generation orphaned
         assert!(s.commit.is_none());
 
@@ -1073,7 +1104,52 @@ mod tests {
         assert_eq!(update_status(&mut s, ch('j')), vec![]);
         assert_eq!(update_status(&mut s, key(KeyCode::Enter)), vec![]);
         assert_eq!(update_status(&mut s, ch('d')), vec![]);
+        assert_eq!(update_status(&mut s, ch('S')), vec![]);
+        assert_eq!(update_status(&mut s, ch('U')), vec![]);
+        assert_eq!(update_status(&mut s, ch('D')), vec![]);
         assert_eq!(s.mode, StatusMode::List);
+    }
+
+    // S stages all files.
+    #[test]
+    fn stage_all_emits_effect() {
+        let mut s = app();
+        let effects = update_status(&mut s, ch('S'));
+        assert_eq!(effects, vec![Effect::StageAll]);
+        assert_eq!(s.status.as_deref(), Some("Staging all…"));
+    }
+
+    // U unstages all files.
+    #[test]
+    fn unstage_all_emits_effect() {
+        let mut s = app();
+        let effects = update_status(&mut s, ch('U'));
+        assert_eq!(effects, vec![Effect::UnstageAll]);
+        assert_eq!(s.status.as_deref(), Some("Unstaging all…"));
+    }
+
+    // D opens a discard-all confirmation; y confirms, Esc cancels.
+    #[test]
+    fn discard_all_requires_confirmation() {
+        let mut s = app();
+        update_status(&mut s, ch('D'));
+        assert_eq!(s.mode, StatusMode::Confirm);
+        assert!(matches!(s.confirm, Some(ConfirmDiscard::All)));
+
+        let effects = update_status(&mut s, ch('y'));
+        assert_eq!(effects, vec![Effect::DiscardAll]);
+        assert_eq!(s.mode, StatusMode::List);
+        assert_eq!(s.status.as_deref(), Some("Discarding all…"));
+    }
+
+    #[test]
+    fn discard_all_cancel() {
+        let mut s = app();
+        update_status(&mut s, ch('D'));
+        assert_eq!(s.mode, StatusMode::Confirm);
+        update_status(&mut s, key(KeyCode::Esc));
+        assert_eq!(s.mode, StatusMode::List);
+        assert!(s.confirm.is_none());
     }
 
     #[test]

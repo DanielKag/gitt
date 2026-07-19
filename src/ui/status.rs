@@ -153,7 +153,8 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &StatusState) {
 
 fn render_status(frame: &mut Frame, area: Rect, state: &StatusState) {
     let text = state.status.clone().unwrap_or_else(|| {
-        "j/k · space stage · c commit · a amend · d discard · Tab diff · Enter · q quit".to_string()
+        "j/k · space stage · S/U all · c commit · a amend · d/D discard · Tab diff · q quit"
+            .to_string()
     });
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
@@ -166,15 +167,21 @@ fn render_menu(frame: &mut Frame, body: Rect, state: &StatusState) {
 }
 
 fn render_confirm(frame: &mut Frame, body: Rect, state: &StatusState) {
+    use crate::state::ConfirmDiscard;
     let Some(confirm) = &state.confirm else {
         return;
     };
-    let verb = if confirm.untracked {
-        "Delete"
-    } else {
-        "Discard changes to"
+    let question = match confirm {
+        ConfirmDiscard::File { path, untracked } => {
+            let verb = if *untracked {
+                "Delete"
+            } else {
+                "Discard changes to"
+            };
+            format!("{verb} {}?", truncate(path, 40))
+        }
+        ConfirmDiscard::All => "Discard ALL changes?".to_string(),
     };
-    let question = format!("{verb} {}?", truncate(&confirm.path, 40));
     let hint = "y  discard    n  cancel";
 
     let width = question.len().max(hint.len()) + 4;
@@ -203,22 +210,16 @@ fn render_commit(frame: &mut Frame, body: Rect, state: &StatusState) {
     let inner_w = 58usize.min(body.width.saturating_sub(2).max(10) as usize);
     let empty = editor.message.is_empty();
 
-    // The message line(s): a spinner/placeholder while empty, else the text with a block cursor.
     let msg_lines: Vec<Line> = if editor.busy && empty {
         let label = if editor.amend {
-            "loading previous message…"
+            "loading…"
         } else {
-            "suggesting with ollama…"
+            "suggesting…"
         };
         vec![Line::styled(format!(" {label}"), theme::dim())]
     } else if empty {
-        vec![Line::styled(
-            " commit message…  (Ctrl-s: suggest with AI)",
-            theme::dim(),
-        )]
+        vec![Line::styled(" █", theme::dim())]
     } else {
-        // While a suggestion is still streaming, a slim `▌` marks the live caret; a settled draft
-        // gets the usual block cursor.
         let cursor = if editor.busy { "▌" } else { "█" };
         let mut wrapped = text::wrap_words(&editor.message, inner_w);
         if wrapped.is_empty() {
@@ -232,15 +233,16 @@ fn render_commit(frame: &mut Frame, body: Rect, state: &StatusState) {
             .collect()
     };
 
-    let verb = if editor.amend { "amend" } else { "commit" };
     let mut lines = msg_lines;
     if let Some(hint) = &editor.hint {
         lines.push(Line::styled(format!(" {hint}"), theme::error()));
     }
-    lines.push(Line::styled(
-        format!(" Enter  {verb}    Ctrl-s  suggest    Esc  cancel"),
-        theme::dim(),
-    ));
+    let hint = if empty && !editor.busy {
+        " Enter send · S suggest · Esc cancel"
+    } else {
+        " Enter send · Esc cancel"
+    };
+    lines.push(Line::styled(hint, theme::dim()));
 
     let title = if editor.amend {
         " Amend commit "
@@ -282,7 +284,7 @@ pub fn render_to_string(state: &StatusState, width: u16, height: u16) -> String 
 mod tests {
     use super::*;
     use crate::domain::StatusEntry;
-    use crate::state::{CommitEditor, ConfirmDiscard, FileAction, FileMenu};
+    use crate::state::{CommitEditor, FileAction, FileMenu};
 
     fn entry(index: char, worktree: char, path: &str) -> StatusEntry {
         StatusEntry {
@@ -346,7 +348,7 @@ mod tests {
         let mut s = app();
         s.cursor = 3;
         s.mode = StatusMode::Confirm;
-        s.confirm = Some(ConfirmDiscard {
+        s.confirm = Some(crate::state::ConfirmDiscard::File {
             path: "notes.txt".into(),
             untracked: true,
         });
