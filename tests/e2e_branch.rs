@@ -232,7 +232,7 @@ fn br_11_13_generate_summary_and_build_prompt() {
     tui.wait_for("wip-parser");
     tui.enter(); // leave search
 
-    tui.send_str("s");
+    tui.send_str("@");
     // "This branch " preamble is stripped and re-capitalized.
     tui.wait_for("Reworks the parser.");
 
@@ -273,7 +273,7 @@ fn br_11_summary_cached_across_runs() {
         tui.send_str("wip");
         tui.wait_for("wip-parser");
         tui.enter();
-        tui.send_str("s");
+        tui.send_str("@");
         tui.wait_for("First branch summary.");
         tui.send_str("q");
         tui.wait_exit();

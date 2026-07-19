@@ -137,6 +137,29 @@ impl PrOpener for RealPr {
         }
     }
 
+    fn close_pr(&self, branch: &str) -> Result<(), GitError> {
+        if let Some(result) = write_sink("pr_close.txt", branch) {
+            return result;
+        }
+        let output = Command::new("gh")
+            .args(["pr", "close", branch])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| GitError::Io(format!("gh: {e}")))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(GitError::Io(if stderr.is_empty() {
+                "gh could not close the PR".to_string()
+            } else {
+                stderr
+            }))
+        }
+    }
+
     fn statuses(&self) -> Result<HashMap<String, PrStatus>, GitError> {
         // Test seam: a canned `gh` JSON payload keeps the PR column deterministic without a network.
         if let Ok(fake) = std::env::var("GITT_FAKE_PR_JSON") {

@@ -4,7 +4,7 @@
 //! model, the same fuzzy-filter search, the same overlay-driven action menu, and the same AI-summary
 //! footer (shared layout math in [`super::model`]) — so both screens behave the same for the user.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::domain::{Branch, PrStatus, branch::summary_key};
 use crate::fuzzy::{self, MatchEntry};
@@ -46,6 +46,7 @@ pub enum BranchAction {
     Checkout,
     OpenPr,
     CopyName,
+    ClosePr,
     Delete,
 }
 
@@ -56,6 +57,7 @@ impl BranchAction {
             BranchAction::Checkout,
             BranchAction::OpenPr,
             BranchAction::CopyName,
+            BranchAction::ClosePr,
             BranchAction::Delete,
         ]
     }
@@ -65,6 +67,7 @@ impl BranchAction {
             BranchAction::Checkout => "Checkout",
             BranchAction::OpenPr => "Open Pull Request",
             BranchAction::CopyName => "Copy name",
+            BranchAction::ClosePr => "Close PR",
             BranchAction::Delete => "Delete branch",
         }
     }
@@ -114,6 +117,11 @@ pub struct BranchState {
     /// Per-branch PR status, keyed by branch name. `None` until the background `gh` fetch first
     /// succeeds (so the column is blank rather than falsely "none" while unknown/unavailable).
     pub pr_statuses: Option<HashMap<String, PrStatus>>,
+    /// When true, show only branches with an open/draft PR (plus the main and current branch).
+    pub pr_filter: bool,
+    /// Branches whose PRs were closed during this session — kept visible under the PR filter so the
+    /// user can see the status change. Cleared on reload (`R`) or next launch.
+    pub pr_filter_pinned: HashSet<String>,
     /// When true, the summary footer grows to show the selected branch's full summary (toggled by `S`).
     pub summary_expanded: bool,
     /// Transient status-line message.
@@ -141,6 +149,8 @@ impl BranchState {
             create_input: String::new(),
             summaries: HashMap::new(),
             pr_statuses: None,
+            pr_filter: false,
+            pr_filter_pinned: HashSet::new(),
             summary_expanded: false,
             status: None,
             status_is_error: false,
@@ -211,9 +221,30 @@ impl BranchState {
         self.pr_statuses.as_ref()?.get(name).copied()
     }
 
-    /// Recompute matches for the current filter, then re-clamp cursor and scroll.
+    /// Recompute matches for the current filter (+ PR filter when active), then re-clamp cursor and scroll.
     pub fn recompute_matches(&mut self) {
         self.matches = fuzzy::filter_items(self.branches(), &self.filter, |b| b.haystack.as_str());
+        if self.pr_filter
+            && let BranchLoad::Loaded(branches) = &self.load
+        {
+            let pr_statuses = &self.pr_statuses;
+            let main = &self.main_branch;
+            let current = &self.current_branch;
+            let pinned = &self.pr_filter_pinned;
+            let branches = branches.as_slice();
+            self.matches.retain(|m| {
+                let Some(b) = branches.get(m.commit_idx) else {
+                    return false;
+                };
+                if b.name == *main || b.name == *current || pinned.contains(&b.name) {
+                    return true;
+                }
+                matches!(
+                    pr_statuses.as_ref().and_then(|s| s.get(&b.name)),
+                    Some(PrStatus::Open | PrStatus::Draft)
+                )
+            });
+        }
         self.clamp_cursor();
         self.clamp_scroll();
     }

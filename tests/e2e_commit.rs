@@ -23,7 +23,7 @@ fn cmt_01_03_09_c_commits_via_shell_handoff() {
 
     tui.send_str("c");
     tui.wait_for("Commit");
-    tui.wait_for("S suggest"); // hint bar shows suggest shortcut when empty
+    tui.wait_for("@ suggest"); // hint bar shows suggest shortcut when empty
     tui.send_str("add new file");
     tui.wait_for("add new file");
     tui.enter();
@@ -70,7 +70,7 @@ fn cmt_05_a_amends_via_shell_handoff() {
     );
 }
 
-// CMT-06 / CMT-07: in a blank editor `S` streams an AI suggestion (from the staged diff + context)
+// CMT-06 / CMT-07: in a blank editor `@` streams an AI suggestion (from the staged diff + context)
 // into the field, which then commits via the shell handoff. The recorded prompt proves the staged
 // diff drove it.
 #[test]
@@ -85,7 +85,7 @@ fn cmt_06_07_s_suggests_message_from_staged_diff() {
 
     tui.send_str("c");
     tui.wait_for("Commit");
-    tui.send_str("S"); // S (empty buffer) triggers AI suggestion
+    tui.send_str("@"); // @ (empty buffer) triggers AI suggestion
     tui.wait_for("Add the staged content file");
 
     // The prompt the model saw carried the staged diff + the staged file path (CMT-07).

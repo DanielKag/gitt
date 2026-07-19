@@ -4,13 +4,13 @@ expression: "render_to_string(&s, 80, 12)"
 ---
 Search:   (3 matches)
 *   feature                                  loading… 3 days ago
-    main                                     loading… 2 weeks ago
-    wip-parser               ┌ wip-parser ───────┐ng… 1 hour ago
-                             │ Checkout          │
+    main                     ┌ wip-parser ───────┐ng… 2 weeks ago
+    wip-parser               │ Checkout          │ng… 1 hour ago
                              │ Open Pull Request │
                              │ Copy name         │
+                             │ Close PR          │
 ┌ai summary──────────────────│ Delete branch     │─────────────────────────────┐
-│press s for an AI summary   └───────────────────┘                             │
+│press @ for an AI summary   └───────────────────┘                             │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-j/k · /search · s summary · n new · d delete · Enter · R reload · q quit
+j/k · /search · @ summary · p PRs · n new · d delete · Enter · R reload · q quit

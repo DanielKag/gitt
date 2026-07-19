@@ -51,14 +51,25 @@ pub fn draw_branch(frame: &mut Frame, state: &BranchState) {
 }
 
 fn render_search(frame: &mut Frame, area: Rect, state: &BranchState) {
-    let mut spans = vec![Span::styled("Search: ", theme::dim())];
-    spans.push(Span::raw(state.filter.clone()));
+    let mut left = vec![Span::styled("Search: ", theme::dim())];
+    left.push(Span::raw(state.filter.clone()));
     if state.mode == BranchMode::Search {
-        spans.push(Span::raw("█"));
+        left.push(Span::raw("█"));
     }
     let count = format!("  ({} matches)", state.matches.len());
-    spans.push(Span::styled(count, theme::dim()));
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    left.push(Span::styled(count, theme::dim()));
+    if state.pr_filter {
+        left.push(Span::styled("  [PR filter]", theme::staged()));
+    }
+    if let Some(msg) = &state.status {
+        let style = if state.status_is_error {
+            theme::error()
+        } else {
+            theme::dim()
+        };
+        left.push(Span::styled(format!("  {msg}"), style));
+    }
+    frame.render_widget(Paragraph::new(Line::from(left)), area);
 }
 
 fn render_body(frame: &mut Frame, area: Rect, state: &BranchState) {
@@ -174,17 +185,9 @@ fn pr_span(pr: Option<PrStatus>, pr_loaded: bool) -> Span<'static> {
     Span::styled(format!("{text:<PR_WIDTH$}"), style)
 }
 
-fn render_status(frame: &mut Frame, area: Rect, state: &BranchState) {
-    let (text, style) = match &state.status {
-        // An error (e.g. a failed checkout) is shown in dominant red for visibility.
-        Some(msg) if state.status_is_error => (msg.clone(), theme::error()),
-        Some(msg) => (msg.clone(), theme::dim()),
-        None => (
-            "j/k · /search · s summary · n new · d delete · Enter · R reload · q quit".to_string(),
-            theme::dim(),
-        ),
-    };
-    frame.render_widget(Paragraph::new(Line::styled(text, style)), area);
+fn render_status(frame: &mut Frame, area: Rect, _state: &BranchState) {
+    let text = "j/k · /search · @ summary · p PRs · n new · d delete · Enter · R reload · q quit";
+    frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
 
 fn render_menu(frame: &mut Frame, body: Rect, state: &BranchState) {
@@ -199,7 +202,7 @@ fn render_confirm(frame: &mut Frame, body: Rect, state: &BranchState) {
         return;
     };
     let question = format!("Delete branch {}?", truncate(&confirm.name, 40));
-    let hint = "y  delete    n  cancel";
+    let hint = "y delete · n cancel";
 
     let width = question.len().max(hint.len()) + 4;
     let height = 4; // 2 text lines + top/bottom border
@@ -217,7 +220,7 @@ fn render_confirm(frame: &mut Frame, body: Rect, state: &BranchState) {
 }
 
 fn render_create(frame: &mut Frame, body: Rect, state: &BranchState) {
-    let hint = "Enter  create    Esc  cancel";
+    let hint = "Enter create · Esc cancel";
     let input = format!(" {}█", state.create_input);
     let width = input.len().max(hint.len()).max(20) + 4;
     let height = 4;
@@ -400,7 +403,7 @@ mod tests {
         let s = app();
         let out = render_to_string(&s, 80, 12);
         assert!(out.contains("ai summary"));
-        assert!(out.contains("press s for an AI summary"));
+        assert!(out.contains("press @ for an AI summary"));
     }
 
     #[test]
@@ -442,7 +445,7 @@ mod tests {
         assert!(!dimmed_at(BranchMode::List), "the plain list is not dimmed");
     }
 
-    // BR-06: a failed checkout is reported on the status line in dominant red (not the dim legend).
+    // BR-06: a failed checkout is reported on the search bar in dominant red.
     #[test]
     fn error_status_is_red() {
         use ratatui::Terminal;
@@ -454,9 +457,12 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
         term.draw(|f| draw_branch(f, &s)).unwrap();
         let buf = term.backend().buffer();
-        // The status line is the last row; its first cell carries the error colour.
-        let cell = &buf[(0, 11)];
-        assert_eq!(cell.fg, Color::Red, "error status is red for visibility");
+        // The error appears on the search bar (row 0); find the first red cell.
+        let red_cell = (0..80).find(|&x| buf[(x, 0)].fg == Color::Red);
+        assert!(
+            red_cell.is_some(),
+            "error text on the search bar is red for visibility"
+        );
     }
 
     // Selected row is reversed, consistent with the log/status/diff lists.

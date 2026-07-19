@@ -125,6 +125,7 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
         | Event::BranchesFailed(_)
         | Event::BranchMutated { .. }
         | Event::BranchCheckedOut { .. }
+        | Event::PrClosed { .. }
         | Event::PrStatusesLoaded(_)
         | Event::PrStatusesFailed(_) => vec![],
     }
@@ -174,8 +175,8 @@ fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Tab => toggle_preview(state),
         KeyCode::Char('f') => toggle_expanded(state),
-        KeyCode::Char('s') => summarize_selected(state),
-        KeyCode::Char('S') => {
+        KeyCode::Char('@') => summarize_selected(state),
+        KeyCode::Char('s') => {
             state.summary_expanded = !state.summary_expanded;
             state.clamp_scroll(); // the list viewport just changed size
             vec![]
@@ -1444,7 +1445,7 @@ mod tests {
     fn sum_cache_read_does_not_clobber_generation() {
         let mut s = app();
         let hash = s.selected_hash().unwrap();
-        update(&mut s, ch('s')); // Generating
+        update(&mut s, ch('@')); // Generating
         update(
             &mut s,
             Event::SummaryReady {
@@ -1468,13 +1469,13 @@ mod tests {
     }
 
     // Summary progress/failure lives in the panel, not the status line — so the keymap legend stays
-    // visible throughout generation (no `status` writes on `s`, chunk, ready, or failure).
+    // visible throughout generation (no `status` writes on `@`, chunk, ready, or failure).
     #[test]
     fn sum_generation_never_touches_status_line() {
         let mut s = app();
         let hash = s.selected_hash().unwrap();
-        update(&mut s, ch('s'));
-        assert_eq!(s.status, None, "`s` must not overwrite the legend");
+        update(&mut s, ch('@'));
+        assert_eq!(s.status, None, "`@` must not overwrite the legend");
         update(
             &mut s,
             Event::SummaryChunk {
@@ -1491,7 +1492,7 @@ mod tests {
         );
         assert_eq!(s.status, None, "completion must not touch the status line");
 
-        update(&mut s, ch('s'));
+        update(&mut s, ch('@'));
         update(
             &mut s,
             Event::SummaryFailed {
@@ -1507,7 +1508,7 @@ mod tests {
     fn sum_04_chunks_stream_into_partial() {
         let mut s = app();
         let hash = s.selected_hash().unwrap();
-        update(&mut s, ch('s'));
+        update(&mut s, ch('@'));
         for delta in ["Adds ", "fuzzy ", "search."] {
             update(
                 &mut s,
@@ -1533,13 +1534,13 @@ mod tests {
         assert_eq!(s.summaries.get(&other), None);
     }
 
-    // SUM-04: `s` starts generation for the selected commit (Generating + GenerateSummary effect).
+    // SUM-04: `@` starts generation for the selected commit (Generating + GenerateSummary effect).
     #[test]
-    fn sum_04_s_starts_generation() {
+    fn sum_04_at_starts_generation() {
         let mut s = app();
         let hash = s.selected_hash().unwrap();
         let subject = s.selected().unwrap().subject.clone();
-        let effects = update(&mut s, ch('s'));
+        let effects = update(&mut s, ch('@'));
         assert_eq!(
             effects,
             vec![Effect::GenerateSummary {
@@ -1558,7 +1559,7 @@ mod tests {
     fn sum_06_generated_summary_becomes_ready() {
         let mut s = app();
         let hash = s.selected_hash().unwrap();
-        update(&mut s, ch('s'));
+        update(&mut s, ch('@'));
         update(
             &mut s,
             Event::SummaryReady {
@@ -1572,12 +1573,12 @@ mod tests {
         );
     }
 
-    // SUM-08: a failed generation records Failed (shown in the panel); `s` retries.
+    // SUM-08: a failed generation records Failed (shown in the panel); `@` retries.
     #[test]
     fn sum_08_failure_records_failed_and_retries() {
         let mut s = app();
         let hash = s.selected_hash().unwrap();
-        update(&mut s, ch('s'));
+        update(&mut s, ch('@'));
         update(
             &mut s,
             Event::SummaryFailed {
@@ -1590,8 +1591,8 @@ mod tests {
             Some(&SummaryState::Failed("ollama not found".into()))
         );
 
-        // Retry: `s` re-enters Generating and emits a fresh effect.
-        let effects = update(&mut s, ch('s'));
+        // Retry: `@` re-enters Generating and emits a fresh effect.
+        let effects = update(&mut s, ch('@'));
         assert_eq!(
             s.summaries.get(&hash),
             Some(&SummaryState::Generating(String::new()))
@@ -1602,12 +1603,12 @@ mod tests {
         ));
     }
 
-    // SUM-09: pressing `s` while already generating is ignored (no duplicate effect).
+    // SUM-09: pressing `@` while already generating is ignored (no duplicate effect).
     #[test]
     fn sum_09_no_duplicate_generation() {
         let mut s = app();
-        update(&mut s, ch('s'));
-        let effects = update(&mut s, ch('s'));
+        update(&mut s, ch('@'));
+        let effects = update(&mut s, ch('@'));
         assert_eq!(effects, vec![], "already generating → ignored");
     }
 
@@ -1616,7 +1617,7 @@ mod tests {
     fn sum_03_miss_does_not_clobber_generating() {
         let mut s = app();
         let hash = s.selected_hash().unwrap();
-        update(&mut s, ch('s')); // Generating
+        update(&mut s, ch('@')); // Generating
         update(&mut s, Event::SummaryMissing { hash: hash.clone() });
         assert_eq!(
             s.summaries.get(&hash),
@@ -1624,18 +1625,18 @@ mod tests {
         );
     }
 
-    // `S` toggles the expanded summary footer in place — the screen stays in List mode so navigation
-    // still works — and only `S` minimizes it (Esc is reserved for the universal quit/close path).
+    // `s` toggles the expanded summary footer in place — the screen stays in List mode so navigation
+    // still works — and only `s` minimizes it (Esc is reserved for the universal quit/close path).
     #[test]
     fn sum_s_toggles_expanded_footer() {
         let mut s = app();
         assert!(!s.summary_expanded);
-        update(&mut s, ch('S'));
+        update(&mut s, ch('s'));
         assert!(s.summary_expanded);
         assert_eq!(s.mode, Mode::List, "still in List mode → navigation works");
 
-        // S again collapses.
-        update(&mut s, ch('S'));
+        // s again collapses.
+        update(&mut s, ch('s'));
         assert!(!s.summary_expanded);
     }
 
@@ -1675,32 +1676,32 @@ mod tests {
             .join(" ");
         s.summaries.insert(hash, SummaryState::Ready(long));
         let collapsed = s.viewport_rows();
-        update(&mut s, ch('S'));
+        update(&mut s, ch('s'));
         assert!(
             s.viewport_rows() < collapsed,
             "expanded footer leaves fewer list rows"
         );
     }
 
-    // `s` still generates while the footer is expanded (generation isn't gated on collapse).
+    // `@` still generates while the footer is expanded (generation isn't gated on collapse).
     #[test]
     fn sum_generate_works_while_expanded() {
         let mut s = app();
-        update(&mut s, ch('S')); // expand
-        let effects = update(&mut s, ch('s'));
+        update(&mut s, ch('s')); // expand
+        let effects = update(&mut s, ch('@'));
         assert!(matches!(
             effects.as_slice(),
             [Effect::GenerateSummary { .. }]
         ));
     }
 
-    // SUM-04: `s` with no commits selected is a safe no-op.
+    // SUM-04: `@` with no commits selected is a safe no-op.
     #[test]
     fn sum_04_no_selection_is_noop() {
         let mut s = AppState::new("main".into(), "main".into(), None);
         s.logs.insert(View::LocalHead, Load::Loaded(vec![]));
         s.recompute_matches();
-        assert_eq!(update(&mut s, ch('s')), vec![]);
+        assert_eq!(update(&mut s, ch('@')), vec![]);
     }
 
     #[test]

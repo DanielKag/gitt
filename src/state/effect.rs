@@ -80,6 +80,8 @@ pub enum Effect {
     CreateBranch(String),
     /// Delete a local branch, then reload the branch list.
     DeleteBranch(String),
+    /// Close the pull request for a branch (`gh pr close <branch>`), then refresh PR statuses.
+    ClosePr(String),
     /// Generate a branch's AI summary from its diff-vs-base and commit subjects, cache it under `key`.
     GenerateBranchSummary {
         key: String,

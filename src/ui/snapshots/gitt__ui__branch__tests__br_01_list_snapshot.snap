@@ -10,7 +10,7 @@ Search:   (3 matches)
 
 
 ┌ai summary────────────────────────────────────────────────────────────────────┐
-│press s for an AI summary                                                     │
+│press @ for an AI summary                                                     │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-j/k · /search · s summary · n new · d delete · Enter · R reload · q quit
+j/k · /search · @ summary · p PRs · n new · d delete · Enter · R reload · q quit

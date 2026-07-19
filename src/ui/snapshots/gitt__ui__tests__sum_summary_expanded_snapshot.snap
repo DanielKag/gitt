@@ -16,9 +16,9 @@ Search:   (3 matches)
 
 
 
-┌ai summary · S: minimize──────────────────────────────────────────────────────┐
+┌ai summary · s: minimize──────────────────────────────────────────────────────┐
 │Adds an in-process fuzzy finder over the commit list, a diff preview pane     │
 │toggled with Tab, an action menu on Enter, and AI summaries generated locally │
 │via Ollama and cached on disk keyed by commit SHA.                            │
 └──────────────────────────────────────────────────────────────────────────────┘
-j/k · /search · Tab preview · s summary · ←/→ view · Enter · R fetch · q quit
+j/k · /search · Tab preview · @ summary · s expand · ←/→ view · Enter · R fetch

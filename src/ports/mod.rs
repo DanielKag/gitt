@@ -144,6 +144,8 @@ pub trait Browser: Send + Sync {
 
 pub trait PrOpener: Send + Sync {
     fn open_pr(&self, hash: &str) -> Result<(), GitError>;
+    /// Close the pull request for a branch (`gh pr close <branch>`).
+    fn close_pr(&self, branch: &str) -> Result<(), GitError>;
     /// The PR status of the current user's branches, keyed by head-branch name (`gh pr list
     /// --author @me`). One call, run off the UI thread; a missing `gh`/non-GitHub repo surfaces as an
     /// error (the column then simply stays blank). Scoped to the user's own PRs so it stays correct in

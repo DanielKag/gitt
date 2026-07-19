@@ -223,7 +223,8 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
     } else if let Some(n) = state.log_loading_count() {
         format!("⟳ loading commits… {n} so far")
     } else {
-        "j/k · /search · Tab preview · s summary · ←/→ view · Enter · R fetch · q quit".to_string()
+        "j/k · /search · Tab preview · @ summary · s expand · ←/→ view · Enter · R fetch · q quit"
+            .to_string()
     };
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
@@ -501,7 +502,7 @@ mod tests {
         );
         let out = render_to_string(&s, 80, 12);
         assert!(out.contains('…'), "overflowing teaser shows an ellipsis");
-        assert!(out.contains("S: expand"), "title hints how to expand");
+        assert!(out.contains("s: expand"), "title hints how to expand");
         insta::assert_snapshot!(out);
     }
 
@@ -569,7 +570,7 @@ mod tests {
             "expanded footer shows the whole summary"
         );
         assert!(
-            out.contains("S: minimize"),
+            out.contains("s: minimize"),
             "title reflects it can be minimized"
         );
         assert!(

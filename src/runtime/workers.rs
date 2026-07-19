@@ -226,6 +226,14 @@ pub fn dispatch(effect: Effect, ports: &Ports, tx: &Sender<Event>) {
                 let _ = tx.send(ev);
             });
         }
+        Effect::ClosePr(branch) => {
+            let pr = ports.pr.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let result = pr.close_pr(&branch).map_err(|e| e.to_string());
+                let _ = tx.send(Event::PrClosed { branch, result });
+            });
+        }
         Effect::CheckoutBranch(name) => {
             let git = ports.git.clone();
             let tx = tx.clone();

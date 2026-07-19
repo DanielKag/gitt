@@ -182,7 +182,7 @@ fn render_confirm(frame: &mut Frame, body: Rect, state: &StatusState) {
         }
         ConfirmDiscard::All => "Discard ALL changes?".to_string(),
     };
-    let hint = "y  discard    n  cancel";
+    let hint = "y discard · n cancel";
 
     let width = question.len().max(hint.len()) + 4;
     let height = 4; // 2 text lines + top/bottom border
@@ -238,7 +238,7 @@ fn render_commit(frame: &mut Frame, body: Rect, state: &StatusState) {
         lines.push(Line::styled(format!(" {hint}"), theme::error()));
     }
     let hint = if empty && !editor.busy {
-        " Enter send · S suggest · Esc cancel"
+        " Enter send · @ suggest · Esc cancel"
     } else {
         " Enter send · Esc cancel"
     };

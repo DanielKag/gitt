@@ -163,7 +163,7 @@ fn sum_01_03_summary_panel_shows_hint() {
     let mut tui = Tui::spawn(repo.path());
     tui.wait_for("local only change");
     tui.wait_for("ai summary");
-    tui.wait_for("press s for an AI summary");
+    tui.wait_for("press @ for an AI summary");
 
     tui.send_str("q");
     tui.wait_exit();
@@ -180,9 +180,9 @@ fn sum_04_06_generate_shows_summary_and_builds_prompt() {
         &[("GITT_FAKE_SUMMARY", "This commit adds a local-only change.")],
     );
     tui.wait_for("local only change");
-    tui.wait_for("press s for an AI summary");
+    tui.wait_for("press @ for an AI summary");
 
-    tui.send_str("s");
+    tui.send_str("@");
     // The panel shows the summary with the "This commit " preamble stripped and re-capitalized.
     tui.wait_for("Adds a local-only change.");
 
@@ -220,7 +220,7 @@ fn sum_06_summary_is_cached_across_runs() {
             ],
         );
         tui.wait_for("local only change");
-        tui.send_str("s");
+        tui.send_str("@");
         tui.wait_for("First generated summary.");
         tui.send_str("q");
         tui.wait_exit();
@@ -254,7 +254,7 @@ fn sum_08_generation_failure_shows_on_panel() {
     );
     tui.wait_for("local only change");
 
-    tui.send_str("s");
+    tui.send_str("@");
     tui.wait_for("summary failed");
 
     tui.send_str("q");

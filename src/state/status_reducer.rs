@@ -167,13 +167,12 @@ fn on_key_list(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
 /// The commit-message editor keymap. Input is paused while `busy` (a suggestion streaming or the amend
 /// prefill loading) so it can't interleave with typing; only Esc/Ctrl-c get through.
 ///
-/// AI suggestion is bound to `S` (Shift+S) when the message buffer is empty — once the user starts
-/// typing, `S` becomes a regular character. This avoids hijacking typed text while keeping the
-/// suggest shortcut easy to reach.
+/// AI suggestion is bound to `@` — the universal "ask AI" key across gitt. In the commit editor it
+/// triggers only when the message buffer is empty (once typing starts, `@` is a regular character).
 fn on_key_commit(state: &mut StatusState, key: KeyEvent) -> Vec<Effect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    // S (Shift+S) triggers AI suggestion only when the buffer is empty.
-    if key.code == KeyCode::Char('S')
+    // @ triggers AI suggestion only when the buffer is empty.
+    if key.code == KeyCode::Char('@')
         && !ctrl
         && state.commit.as_ref().is_some_and(|e| e.message.is_empty())
     {
@@ -961,12 +960,12 @@ mod tests {
         assert!(editor.hint.as_deref().unwrap().contains("cannot amend"));
     }
 
-    // CMT-06/07: `S` (empty buffer) drafts a suggestion; chunks stream in; Ready settles it.
+    // CMT-06/07: `@` (empty buffer) drafts a suggestion; chunks stream in; Ready settles it.
     #[test]
-    fn cmt_06_shift_s_suggests_and_streams() {
+    fn cmt_06_at_suggests_and_streams() {
         let mut s = app();
         update_status(&mut s, ch('c'));
-        let effects = update_status(&mut s, ch('S'));
+        let effects = update_status(&mut s, ch('@'));
         // Branch + every staged path (staged_new.txt `A `, both.txt `MM`) become the AI context.
         assert_eq!(
             effects,
@@ -1004,7 +1003,7 @@ mod tests {
     fn cmt_06_busy_pauses_input_and_failure_is_inline() {
         let mut s = app();
         update_status(&mut s, ch('c'));
-        update_status(&mut s, ch('S')); // busy (empty buffer → suggest)
+        update_status(&mut s, ch('@')); // busy (empty buffer → suggest)
         // A keypress mid-stream is ignored.
         update_status(&mut s, ch('x'));
         assert_eq!(s.commit.as_ref().unwrap().message, "");
@@ -1026,23 +1025,27 @@ mod tests {
         assert_eq!(s.commit.as_ref().unwrap().message, "x");
     }
 
-    // CMT-06: lowercase `s` always types a literal. `S` triggers suggest only when the buffer is
-    // empty; once text is present, `S` types the letter.
+    // CMT-06: `@` triggers suggest only when the buffer is empty; once text is present, `@` types.
     #[test]
-    fn cmt_06_s_keybinding_behavior() {
+    fn cmt_06_at_keybinding_behavior() {
         let mut s = app();
         update_status(&mut s, ch('c'));
-        // Blank editor: lowercase `s` types, does not suggest.
-        let effects = update_status(&mut s, ch('s'));
-        assert_eq!(effects, vec![], "bare s never triggers a suggestion");
-        drive(&mut s, vec![ch('h'), ch('i'), ch('p')]);
+        // Blank editor: `@` triggers suggest.
+        let effects = update_status(&mut s, ch('@'));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::SuggestCommitMessage { .. }]
+        ));
+        // Cancel the suggestion, reopen.
+        update_status(&mut s, key(KeyCode::Esc));
+        update_status(&mut s, ch('c'));
+        drive(&mut s, vec![ch('s'), ch('h'), ch('i'), ch('p')]);
         assert_eq!(s.commit.as_ref().unwrap().message, "ship");
-        assert!(!s.commit.as_ref().unwrap().busy);
 
-        // `S` on a non-empty buffer types the character instead of suggesting.
-        let effects = update_status(&mut s, ch('S'));
-        assert_eq!(effects, vec![], "S with text types, doesn't suggest");
-        assert_eq!(s.commit.as_ref().unwrap().message, "shipS");
+        // `@` on a non-empty buffer types the character instead of suggesting.
+        let effects = update_status(&mut s, ch('@'));
+        assert_eq!(effects, vec![], "@ with text types, doesn't suggest");
+        assert_eq!(s.commit.as_ref().unwrap().message, "ship@");
     }
 
     // CMT-08: Esc cancels the editor (→ List), making no commit; a second Esc then quits.
@@ -1077,7 +1080,7 @@ mod tests {
     fn cmt_stale_suggestion_after_cancel_is_ignored() {
         let mut s = app();
         update_status(&mut s, ch('c'));
-        update_status(&mut s, ch('S')); // request a suggestion (empty → busy)
+        update_status(&mut s, ch('@')); // request a suggestion (empty → busy)
         update_status(&mut s, key(KeyCode::Esc)); // cancel: editor closed, generation orphaned
         assert!(s.commit.is_none());
 

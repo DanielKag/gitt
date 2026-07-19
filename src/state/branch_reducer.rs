@@ -100,9 +100,23 @@ pub fn update_branch(state: &mut BranchState, event: Event) -> Vec<Effect> {
             state.summaries.insert(hash, SummaryState::Failed(error));
             vec![]
         }
+        Event::PrClosed { branch, result } => match result {
+            Ok(()) => {
+                state.set_status(format!("Closed PR for {branch}"));
+                state.pr_filter_pinned.insert(branch);
+                vec![Effect::LoadPrStatuses]
+            }
+            Err(e) => {
+                state.set_error(format!("Close PR failed: {e}"));
+                vec![]
+            }
+        },
         // The background PR fetch landed: overlay the statuses onto the column.
         Event::PrStatusesLoaded(map) => {
             state.pr_statuses = Some(map);
+            if state.pr_filter {
+                state.recompute_matches();
+            }
             vec![]
         }
         // gh missing / non-GitHub repo: leave the column blank (no false "none", no status noise).
@@ -186,12 +200,13 @@ fn on_key_list(state: &mut BranchState, key: KeyEvent) -> Vec<Effect> {
             state.mode = BranchMode::Search;
             vec![]
         }
-        KeyCode::Char('s') => summarize_selected(state),
-        KeyCode::Char('S') => {
+        KeyCode::Char('@') => summarize_selected(state),
+        KeyCode::Char('s') => {
             state.summary_expanded = !state.summary_expanded;
             state.clamp_scroll(); // the list viewport just changed size
             vec![]
         }
+        KeyCode::Char('p') => toggle_pr_filter(state),
         KeyCode::Char('n') => {
             state.mode = BranchMode::Create;
             state.create_input.clear();
@@ -285,8 +300,14 @@ fn quit(state: &mut BranchState) -> Vec<Effect> {
 
 fn reload(state: &mut BranchState) -> Vec<Effect> {
     state.set_status("reloading…");
-    // Refetch PR statuses too, so `R` picks up PRs opened/merged since the screen opened.
+    state.pr_filter_pinned.clear();
     vec![Effect::LoadBranches, Effect::LoadPrStatuses]
+}
+
+fn toggle_pr_filter(state: &mut BranchState) -> Vec<Effect> {
+    state.pr_filter = !state.pr_filter;
+    state.recompute_matches();
+    vec![]
 }
 
 fn move_by(state: &mut BranchState, delta: isize) -> Vec<Effect> {
@@ -391,6 +412,11 @@ fn execute_menu(state: &mut BranchState) -> Vec<Effect> {
             state.mode = BranchMode::List;
             state.set_status("Copied branch name");
             vec![Effect::CopyToClipboard(name)]
+        }
+        BranchAction::ClosePr => {
+            state.mode = BranchMode::List;
+            state.set_status(format!("Closing PR for {name}…"));
+            vec![Effect::ClosePr(name)]
         }
         BranchAction::Delete => {
             // Route through the mandatory confirmation overlay (and refuse the current branch).
@@ -667,7 +693,7 @@ mod tests {
     fn br_09_menu_delete_current_refused() {
         let mut s = app(); // cursor 0 = "feature" is current
         update_branch(&mut s, key(KeyCode::Enter));
-        drive(&mut s, vec![ch('j'), ch('j'), ch('j')]); // Delete branch
+        drive(&mut s, vec![ch('j'), ch('j'), ch('j'), ch('j')]); // Delete branch
         assert_eq!(s.menu.as_ref().unwrap().selected(), BranchAction::Delete);
         let effects = update_branch(&mut s, key(KeyCode::Enter));
         assert_eq!(effects, vec![]);
@@ -746,13 +772,13 @@ mod tests {
         );
     }
 
-    // BR-12: `s` starts generation for the selected branch (Generating + GenerateBranchSummary).
+    // BR-12: `@` starts generation for the selected branch (Generating + GenerateBranchSummary).
     #[test]
-    fn br_12_s_starts_generation() {
+    fn br_12_at_starts_generation() {
         let mut s = app();
         let key = s.selected_summary_key().unwrap();
         let name = s.selected_name().unwrap();
-        let effects = update_branch(&mut s, ch('s'));
+        let effects = update_branch(&mut s, ch('@'));
         assert_eq!(
             effects,
             vec![Effect::GenerateBranchSummary {
@@ -765,16 +791,16 @@ mod tests {
             s.summaries.get(&key),
             Some(&SummaryState::Generating(String::new()))
         );
-        // A second `s` while generating is ignored.
-        assert_eq!(update_branch(&mut s, ch('s')), vec![]);
+        // A second `@` while generating is ignored.
+        assert_eq!(update_branch(&mut s, ch('@')), vec![]);
     }
 
-    // BR-12: streamed chunks accumulate; a Ready overwrites; `S` toggles the expanded footer.
+    // BR-12: streamed chunks accumulate; a Ready overwrites; `s` toggles the expanded footer.
     #[test]
     fn br_12_summary_stream_and_expand() {
         let mut s = app();
         let key = s.selected_summary_key().unwrap();
-        update_branch(&mut s, ch('s'));
+        update_branch(&mut s, ch('@'));
         for delta in ["Adds ", "the ", "widget."] {
             update_branch(
                 &mut s,
@@ -801,7 +827,7 @@ mod tests {
         );
 
         assert!(!s.summary_expanded);
-        update_branch(&mut s, ch('S'));
+        update_branch(&mut s, ch('s'));
         assert!(s.summary_expanded);
         assert_eq!(s.mode, BranchMode::List, "still navigable");
     }
@@ -810,7 +836,7 @@ mod tests {
     #[test]
     fn br_12_summary_never_touches_status_line() {
         let mut s = app();
-        update_branch(&mut s, ch('s'));
+        update_branch(&mut s, ch('@'));
         assert_eq!(s.status, None);
         let key = s.selected_summary_key().unwrap();
         update_branch(
@@ -905,8 +931,155 @@ mod tests {
         assert_eq!(update_branch(&mut s, ch('j')), vec![]);
         assert_eq!(update_branch(&mut s, key(KeyCode::Enter)), vec![]);
         assert_eq!(update_branch(&mut s, ch('d')), vec![]);
-        assert_eq!(update_branch(&mut s, ch('s')), vec![]);
+        assert_eq!(update_branch(&mut s, ch('@')), vec![]);
         assert_eq!(s.mode, BranchMode::List);
+    }
+
+    // Close PR via menu emits a ClosePr effect.
+    #[test]
+    fn close_pr_effect() {
+        let mut s = app();
+        drive(&mut s, vec![ch('j'), ch('j')]); // wip-parser
+        update_branch(&mut s, key(KeyCode::Enter));
+        drive(&mut s, vec![ch('j'), ch('j'), ch('j')]); // ClosePr
+        assert_eq!(s.menu.as_ref().unwrap().selected(), BranchAction::ClosePr);
+        let effects = update_branch(&mut s, key(KeyCode::Enter));
+        assert_eq!(effects, vec![Effect::ClosePr("wip-parser".into())]);
+    }
+
+    // A successful PR close reports it and reloads PR statuses.
+    #[test]
+    fn close_pr_success_reloads_statuses() {
+        let mut s = app();
+        let effects = update_branch(
+            &mut s,
+            Event::PrClosed {
+                branch: "wip-parser".into(),
+                result: Ok(()),
+            },
+        );
+        assert_eq!(effects, vec![Effect::LoadPrStatuses]);
+        assert_eq!(s.status.as_deref(), Some("Closed PR for wip-parser"));
+        assert!(
+            s.pr_filter_pinned.contains("wip-parser"),
+            "closed branch is pinned for this session"
+        );
+    }
+
+    // A failed PR close reports the error; no reload.
+    #[test]
+    fn close_pr_failure_shows_error() {
+        let mut s = app();
+        let effects = update_branch(
+            &mut s,
+            Event::PrClosed {
+                branch: "wip-parser".into(),
+                result: Err("no PR found".into()),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(s.status.as_deref(), Some("Close PR failed: no PR found"));
+        assert!(s.status_is_error);
+    }
+
+    // `p` toggles the PR filter: only branches with open/draft PRs (+ main + current) remain visible.
+    #[test]
+    fn pr_filter_toggle() {
+        use crate::domain::PrStatus;
+        use std::collections::HashMap;
+
+        let mut s = app(); // feature (current), main, wip-parser, bugfix
+        let mut map = HashMap::new();
+        map.insert("wip-parser".to_string(), PrStatus::Open);
+        map.insert("bugfix".to_string(), PrStatus::Closed);
+        s.pr_statuses = Some(map);
+
+        // All 4 visible before filter.
+        assert_eq!(s.matches.len(), 4);
+
+        // Toggle filter on.
+        update_branch(&mut s, ch('p'));
+        assert!(s.pr_filter);
+        // feature (current) + main + wip-parser (open). bugfix (closed) is hidden.
+        assert_eq!(s.matches.len(), 3);
+        let names: Vec<_> = s
+            .matches
+            .iter()
+            .filter_map(|m| s.branches().get(m.commit_idx).map(|b| b.name.as_str()))
+            .collect();
+        assert!(names.contains(&"feature"), "current branch visible");
+        assert!(names.contains(&"main"), "main branch visible");
+        assert!(names.contains(&"wip-parser"), "open PR branch visible");
+        assert!(!names.contains(&"bugfix"), "closed PR branch hidden");
+
+        // Toggle filter off: all 4 visible again.
+        update_branch(&mut s, ch('p'));
+        assert!(!s.pr_filter);
+        assert_eq!(s.matches.len(), 4);
+    }
+
+    // PR filter with draft PRs: drafts are included alongside open.
+    #[test]
+    fn pr_filter_includes_drafts() {
+        use crate::domain::PrStatus;
+        use std::collections::HashMap;
+
+        let mut s = app();
+        let mut map = HashMap::new();
+        map.insert("bugfix".to_string(), PrStatus::Draft);
+        s.pr_statuses = Some(map);
+
+        update_branch(&mut s, ch('p'));
+        let names: Vec<_> = s
+            .matches
+            .iter()
+            .filter_map(|m| s.branches().get(m.commit_idx).map(|b| b.name.as_str()))
+            .collect();
+        assert!(names.contains(&"bugfix"), "draft PR branch visible");
+    }
+
+    // When PR statuses load while the filter is active, matches are recomputed.
+    #[test]
+    fn pr_statuses_loaded_recomputes_when_filtered() {
+        use crate::domain::PrStatus;
+        use std::collections::HashMap;
+
+        let mut s = app();
+        s.pr_filter = true;
+        // No statuses yet: all branches pass through (no data to filter on).
+        s.recompute_matches();
+        assert_eq!(s.matches.len(), 2); // only current + main (no PR data means no open/draft match)
+
+        let mut map = HashMap::new();
+        map.insert("wip-parser".to_string(), PrStatus::Open);
+        update_branch(&mut s, Event::PrStatusesLoaded(map));
+        // Now wip-parser is also visible.
+        assert_eq!(s.matches.len(), 3);
+    }
+
+    // A branch whose PR was closed during this session stays visible under the PR filter.
+    #[test]
+    fn pr_filter_pinned_branch_stays_visible() {
+        use crate::domain::PrStatus;
+        use std::collections::HashMap;
+
+        let mut s = app();
+        let mut map = HashMap::new();
+        map.insert("wip-parser".to_string(), PrStatus::Closed);
+        s.pr_statuses = Some(map);
+
+        // Turn on filter — wip-parser (closed) is hidden.
+        update_branch(&mut s, ch('p'));
+        assert_eq!(s.matches.len(), 2); // feature + main only
+
+        // Pin wip-parser (simulates a PrClosed event).
+        s.pr_filter_pinned.insert("wip-parser".to_string());
+        s.recompute_matches();
+        assert_eq!(s.matches.len(), 3, "pinned branch survives the filter");
+
+        // Reload clears pinned set.
+        update_branch(&mut s, ch('R'));
+        assert!(s.pr_filter_pinned.is_empty(), "reload clears pins");
     }
 
     // Reload keeps the previously-selected branch under the cursor when it still exists.

@@ -38,15 +38,15 @@ pub fn render_footer(
         ),
         // Missing, or not looked up yet.
         _ => (
-            Text::from(Line::styled("press s for an AI summary", theme::dim())),
+            Text::from(Line::styled("press @ for an AI summary", theme::dim())),
             false,
         ),
     };
 
     let title = if expanded {
-        "ai summary · S: minimize"
+        "ai summary · s: minimize"
     } else if overflow {
-        "ai summary · S: expand"
+        "ai summary · s: expand"
     } else {
         "ai summary"
     };

@@ -73,6 +73,11 @@ pub enum Event {
         branch: String,
         result: Result<(), String>,
     },
+    /// A PR close finished. On success the PR column is refreshed; on failure the status line reports it.
+    PrClosed {
+        branch: String,
+        result: Result<(), String>,
+    },
     /// The per-branch PR statuses finished loading (fills the PR column).
     PrStatusesLoaded(HashMap<String, PrStatus>),
     /// The per-branch PR statuses failed to load (e.g. no `gh` / not a GitHub repo); column stays blank.

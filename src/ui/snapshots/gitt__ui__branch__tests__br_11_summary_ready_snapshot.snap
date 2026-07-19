@@ -13,4 +13,4 @@ Search:   (3 matches)
 │Adds an in-process fuzzy finder over the branch list.                         │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-j/k · /search · s summary · n new · d delete · Enter · R reload · q quit
+j/k · /search · @ summary · p PRs · n new · d delete · Enter · R reload · q quit
