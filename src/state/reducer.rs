@@ -45,19 +45,19 @@ pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
         }
         Event::FetchFinished(result) => match result {
             Ok(()) => {
-                state.status = Some("fetched".to_string());
+                state.set_status("fetched");
                 vec![start_log_load(state, state.view)]
             }
             Err(e) => {
-                state.status = Some(format!("fetch failed: {e}"));
+                state.set_error(format!("fetch failed: {e}"));
                 vec![]
             }
         },
         Event::ActionFinished { label, result } => {
-            state.status = Some(match result {
-                Ok(()) => label,
-                Err(e) => format!("{label} failed: {e}"),
-            });
+            match result {
+                Ok(()) => state.set_status(label),
+                Err(e) => state.set_error(format!("{label} failed: {e}")),
+            }
             vec![]
         }
         // Cache hit. `or_insert`: never clobber a `Generating`/`Ready`/`Failed` state — if the user
@@ -182,7 +182,7 @@ fn on_key_list(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             vec![]
         }
         KeyCode::Char('R') => {
-            state.status = Some("fetching…".to_string());
+            state.set_status("fetching…");
             vec![Effect::Fetch]
         }
         KeyCode::Enter => open_menu(state),
@@ -414,7 +414,7 @@ fn on_log_page_failed(state: &mut AppState, view: View, epoch: u64, error: Strin
         Some(Load::Streaming(commits)) if !commits.is_empty() => {
             state.logs.insert(view, Load::Loaded(commits));
             if is_current {
-                state.status = Some(format!("log load stopped: {error}"));
+                state.set_error(format!("log load stopped: {error}"));
             }
         }
         // First page failed (or nothing loaded): surface the failure.
@@ -422,7 +422,7 @@ fn on_log_page_failed(state: &mut AppState, view: View, epoch: u64, error: Strin
             state.logs.insert(view, Load::Failed(error.clone()));
             if is_current {
                 state.matches.clear();
-                state.status = Some(format!("log failed: {error}"));
+                state.set_error(format!("log failed: {error}"));
             }
         }
     }
@@ -585,21 +585,21 @@ fn execute_menu(state: &mut AppState) -> Vec<Effect> {
         MenuAction::OpenGithub => match state.remote_url.as_deref() {
             Some(remote) => match url::commit_url(remote, &hash) {
                 Some(u) => {
-                    state.status = Some("Opening GitHub…".to_string());
+                    state.set_status("Opening GitHub…");
                     vec![Effect::OpenBrowser(u)]
                 }
                 None => {
-                    state.status = Some("remote is not a GitHub URL".to_string());
+                    state.set_error("remote is not a GitHub URL");
                     vec![]
                 }
             },
             None => {
-                state.status = Some("no remote configured".to_string());
+                state.set_error("no remote configured");
                 vec![]
             }
         },
         MenuAction::OpenPr => {
-            state.status = Some("Opening PR…".to_string());
+            state.set_status("Opening PR…");
             // `gh pr view <sha>` can't resolve a commit to its PR. GitHub's squash-merge names the
             // commit `subject (#N)`, so prefer that PR number when present; otherwise fall back to
             // the hash (best effort).
@@ -609,15 +609,15 @@ fn execute_menu(state: &mut AppState) -> Vec<Effect> {
             vec![Effect::OpenPr(target)]
         }
         MenuAction::CopySha => {
-            state.status = Some("Copied SHA to clipboard".to_string());
+            state.set_status("Copied SHA to clipboard");
             vec![Effect::CopyToClipboard(hash)]
         }
         MenuAction::Checkout => {
-            state.status = Some(format!("Checking out {short}…"));
+            state.set_status(format!("Checking out {short}…"));
             vec![Effect::Checkout(hash)]
         }
         MenuAction::CopyRevert => {
-            state.status = Some("Copied revert command".to_string());
+            state.set_status("Copied revert command");
             vec![Effect::CopyToClipboard(format!("git revert {hash}"))]
         }
     }

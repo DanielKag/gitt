@@ -65,6 +65,14 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DiffState) {
         spans.push(Span::styled(format!(" {label} "), style));
         spans.push(Span::raw(" "));
     }
+    if let Some(msg) = &state.status {
+        let style = if state.status_is_error {
+            theme::error()
+        } else {
+            theme::dim()
+        };
+        spans.push(Span::styled(format!("  {msg}"), style));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -158,10 +166,8 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &DiffState) {
     preview_pane(frame, area, "diff", &text, state.preview_scroll);
 }
 
-fn render_status(frame: &mut Frame, area: Rect, state: &DiffState) {
-    let text = state.status.clone().unwrap_or_else(|| {
-        "j/k move · ←/→ scope · Tab diff · f wide · Enter actions · R reload · q quit".to_string()
-    });
+fn render_status(frame: &mut Frame, area: Rect, _state: &DiffState) {
+    let text = "j/k move · ←/→ scope · Tab diff · f wide · Enter actions · R reload · q quit";
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
 

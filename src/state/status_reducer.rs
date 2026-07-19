@@ -37,7 +37,7 @@ pub fn update_status(state: &mut StatusState, event: Event) -> Vec<Effect> {
             }
         }
         Event::StatusFailed(error) => {
-            state.status = Some(format!("status failed: {error}"));
+            state.set_error(format!("status failed: {error}"));
             state.load = StatusLoad::Failed(error);
             vec![]
         }
@@ -54,10 +54,10 @@ pub fn update_status(state: &mut StatusState, event: Event) -> Vec<Effect> {
             vec![]
         }
         Event::StatusMutated { label, result } => {
-            state.status = Some(match result {
-                Ok(()) => label,
-                Err(e) => format!("{label} failed: {e}"),
-            });
+            match result {
+                Ok(()) => state.set_status(label),
+                Err(e) => state.set_error(format!("{label} failed: {e}")),
+            }
             // Reload from git regardless of outcome so the view can't drift.
             vec![Effect::LoadStatus]
         }
@@ -243,7 +243,7 @@ fn quit(state: &mut StatusState) -> Vec<Effect> {
 }
 
 fn reload(state: &mut StatusState) -> Vec<Effect> {
-    state.status = Some("reloading…".to_string());
+    state.set_status("reloading…");
     vec![Effect::LoadStatus]
 }
 
@@ -333,7 +333,7 @@ fn toggle_stage(state: &mut StatusState) -> Vec<Effect> {
 fn stage_selected(state: &mut StatusState) -> Vec<Effect> {
     match state.selected_path() {
         Some(path) => {
-            state.status = Some(format!("Staging {path}…"));
+            state.set_status(format!("Staging {path}…"));
             vec![Effect::Stage(path)]
         }
         None => vec![],
@@ -343,7 +343,7 @@ fn stage_selected(state: &mut StatusState) -> Vec<Effect> {
 fn unstage_selected(state: &mut StatusState) -> Vec<Effect> {
     match state.selected_path() {
         Some(path) => {
-            state.status = Some(format!("Unstaging {path}…"));
+            state.set_status(format!("Unstaging {path}…"));
             vec![Effect::Unstage(path)]
         }
         None => vec![],
@@ -448,11 +448,11 @@ fn confirm_discard(state: &mut StatusState) -> Vec<Effect> {
     state.mode = StatusMode::List;
     match state.confirm.take() {
         Some(ConfirmDiscard::File { path, untracked }) => {
-            state.status = Some(format!("Discarding {path}…"));
+            state.set_status(format!("Discarding {path}…"));
             vec![Effect::Discard { path, untracked }]
         }
         Some(ConfirmDiscard::All) => {
-            state.status = Some("Discarding all…".to_string());
+            state.set_status("Discarding all…");
             vec![Effect::DiscardAll]
         }
         None => vec![],
@@ -463,7 +463,7 @@ fn stage_all(state: &mut StatusState) -> Vec<Effect> {
     if state.entries().is_empty() {
         return vec![];
     }
-    state.status = Some("Staging all…".to_string());
+    state.set_status("Staging all…");
     vec![Effect::StageAll]
 }
 
@@ -471,7 +471,7 @@ fn unstage_all(state: &mut StatusState) -> Vec<Effect> {
     if state.entries().is_empty() {
         return vec![];
     }
-    state.status = Some("Unstaging all…".to_string());
+    state.set_status("Unstaging all…");
     vec![Effect::UnstageAll]
 }
 
@@ -512,12 +512,12 @@ fn execute_menu(state: &mut StatusState) -> Vec<Effect> {
     match action {
         FileAction::Stage => {
             state.mode = StatusMode::List;
-            state.status = Some(format!("Staging {path}…"));
+            state.set_status(format!("Staging {path}…"));
             vec![Effect::Stage(path)]
         }
         FileAction::Unstage => {
             state.mode = StatusMode::List;
-            state.status = Some(format!("Unstaging {path}…"));
+            state.set_status(format!("Unstaging {path}…"));
             vec![Effect::Unstage(path)]
         }
         FileAction::Discard => {
@@ -531,7 +531,7 @@ fn execute_menu(state: &mut StatusState) -> Vec<Effect> {
         }
         FileAction::CopyPath => {
             state.mode = StatusMode::List;
-            state.status = Some("Copied path".to_string());
+            state.set_status("Copied path");
             vec![Effect::CopyToClipboard(path)]
         }
     }

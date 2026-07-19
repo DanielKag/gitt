@@ -158,8 +158,9 @@ pub struct AppState {
     /// When true, the summary footer grows to show the selected commit's full summary (toggled by
     /// `S`); the list stays navigable above it.
     pub summary_expanded: bool,
-    /// Transient status-line message.
+    /// Transient status-line message (shown on the search bar, not the keymap legend).
     pub status: Option<String>,
+    pub status_is_error: bool,
     pub current_branch: String,
     pub main_branch: String,
     pub remote_url: Option<String>,
@@ -189,12 +190,25 @@ impl AppState {
             summaries: HashMap::new(),
             summary_expanded: false,
             status: None,
+            status_is_error: false,
             current_branch,
             main_branch,
             remote_url,
             size: (80, 24),
             should_quit: false,
         }
+    }
+
+    /// Set an informational status-line message (rendered dim on the search bar).
+    pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_is_error = false;
+    }
+
+    /// Set an error status-line message (rendered in dominant red on the search bar).
+    pub fn set_error(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_is_error = true;
     }
 
     /// Height (rows) of the summary footer, including its border. See [`summary_panel_rows`].

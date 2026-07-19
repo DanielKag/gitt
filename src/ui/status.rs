@@ -46,11 +46,19 @@ fn render_header(frame: &mut Frame, area: Rect, state: &StatusState) {
     let staged = entries.iter().filter(|e| e.is_staged()).count();
     let title = format!(" {} (status) ", state.branch);
     let summary = format!("  {} changed · {} staged", entries.len(), staged);
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(title, theme::active_view()),
         Span::styled(summary, theme::dim()),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+    ];
+    if let Some(msg) = &state.status {
+        let style = if state.status_is_error {
+            theme::error()
+        } else {
+            theme::dim()
+        };
+        spans.push(Span::styled(format!("  {msg}"), style));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_body(frame: &mut Frame, area: Rect, state: &StatusState) {
@@ -151,11 +159,8 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &StatusState) {
     preview_pane(frame, area, "diff", &text, state.preview_scroll);
 }
 
-fn render_status(frame: &mut Frame, area: Rect, state: &StatusState) {
-    let text = state.status.clone().unwrap_or_else(|| {
-        "j/k · space stage · S/U all · c commit · a amend · d/D discard · Tab diff · q quit"
-            .to_string()
-    });
+fn render_status(frame: &mut Frame, area: Rect, _state: &StatusState) {
+    let text = "j/k · space stage · S/U all · c commit · a amend · d/D discard · Tab diff · q quit";
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
 

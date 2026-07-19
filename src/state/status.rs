@@ -149,8 +149,9 @@ pub struct StatusState {
     pub commit: Option<CommitEditor>,
     /// A confirmed commit to run in the restored terminal after the TUI exits (hooks stream live).
     pub pending_commit: Option<PendingCommit>,
-    /// Transient status-line message.
+    /// Transient status-line message (shown on the header bar, not the keymap legend).
     pub status: Option<String>,
+    pub status_is_error: bool,
     pub branch: String,
     /// Terminal size (cols, rows).
     pub size: (u16, u16),
@@ -173,10 +174,23 @@ impl StatusState {
             commit: None,
             pending_commit: None,
             status: None,
+            status_is_error: false,
             branch,
             size: (80, 24),
             should_quit: false,
         }
+    }
+
+    /// Set an informational status-line message (rendered dim on the header bar).
+    pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_is_error = false;
+    }
+
+    /// Set an error status-line message (rendered in dominant red on the header bar).
+    pub fn set_error(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_is_error = true;
     }
 
     /// The diff pane's share of the body height (percent). The pane sits *below* the file list:

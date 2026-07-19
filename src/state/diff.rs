@@ -97,8 +97,9 @@ pub struct DiffState {
     /// First visible line of the diff pane content (vertical scroll offset within the diff).
     pub preview_scroll: u16,
     pub menu: Option<DiffMenu>,
-    /// Transient status-line message.
+    /// Transient status-line message (shown on the header bar, not the keymap legend).
     pub status: Option<String>,
+    pub status_is_error: bool,
     /// Resolved main-branch name, used for the `vs <main>` tab and empty state.
     pub main_branch: String,
     /// Terminal size (cols, rows).
@@ -121,10 +122,23 @@ impl DiffState {
             preview_scroll: 0,
             menu: None,
             status: None,
+            status_is_error: false,
             main_branch,
             size: (80, 24),
             should_quit: false,
         }
+    }
+
+    /// Set an informational status-line message (rendered dim on the header bar).
+    pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_is_error = false;
+    }
+
+    /// Set an error status-line message (rendered in dominant red on the header bar).
+    pub fn set_error(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_is_error = true;
     }
 
     /// The diff pane's share of the body height (percent). The pane sits *below* the file list:

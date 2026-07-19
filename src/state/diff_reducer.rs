@@ -38,7 +38,7 @@ pub fn update_diff(state: &mut DiffState, event: Event) -> Vec<Effect> {
         }
         Event::DiffFilesFailed { scope, error } => {
             if scope == state.scope {
-                state.status = Some(format!("diff failed: {error}"));
+                state.set_error(format!("diff failed: {error}"));
             }
             state.loads.insert(scope, DiffLoad::Failed(error));
             vec![]
@@ -63,10 +63,10 @@ pub fn update_diff(state: &mut DiffState, event: Event) -> Vec<Effect> {
         }
         // A copy action finished; report its outcome on the status line (as the log screen does).
         Event::ActionFinished { label, result } => {
-            state.status = Some(match result {
-                Ok(()) => label,
-                Err(e) => format!("{label} failed: {e}"),
-            });
+            match result {
+                Ok(()) => state.set_status(label),
+                Err(e) => state.set_error(format!("{label} failed: {e}")),
+            }
             vec![]
         }
         // Events for the other screens never reach this reducer at runtime; ignore.
@@ -147,7 +147,7 @@ fn quit(state: &mut DiffState) -> Vec<Effect> {
 }
 
 fn reload(state: &mut DiffState) -> Vec<Effect> {
-    state.status = Some("reloading…".to_string());
+    state.set_status("reloading…");
     vec![Effect::LoadDiffFiles(state.scope)]
 }
 

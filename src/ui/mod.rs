@@ -73,6 +73,20 @@ fn render_search(frame: &mut Frame, area: Rect, state: &AppState) {
     }
     let count = format!("  ({} matches)", state.matches.len());
     spans.push(Span::styled(count, theme::dim()));
+    if let Some(n) = state.log_loading_count() {
+        spans.push(Span::styled(
+            format!("  ⟳ loading… {n} so far"),
+            theme::dim(),
+        ));
+    }
+    if let Some(msg) = &state.status {
+        let style = if state.status_is_error {
+            theme::error()
+        } else {
+            theme::dim()
+        };
+        spans.push(Span::styled(format!("  {msg}"), style));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -215,17 +229,8 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
     preview_pane(frame, area, "diff", &text, state.preview_scroll);
 }
 
-fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
-    // A transient action message wins; otherwise, while the history is still streaming in, show the
-    // load progress (it clears itself once the load completes); otherwise the key hints.
-    let text = if let Some(status) = &state.status {
-        status.clone()
-    } else if let Some(n) = state.log_loading_count() {
-        format!("⟳ loading commits… {n} so far")
-    } else {
-        "j/k · /search · Tab preview · @ summary · s expand · ←/→ view · Enter · R fetch · q quit"
-            .to_string()
-    };
+fn render_status(frame: &mut Frame, area: Rect, _state: &AppState) {
+    let text = "j/k · /search · Tab preview · @ summary · s expand · ←/→ view · Enter · R fetch · q quit";
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
 
