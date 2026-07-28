@@ -2,6 +2,16 @@
 name = "gitt"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Git-ty — an interactive git TUI: fuzzy log, staging, diffs, and branches"
+authors = ["Daniel Kagan"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/DanielKag/gitt"
+homepage = "https://github.com/DanielKag/gitt"
+keywords = ["git", "tui", "cli", "ratatui", "fuzzy"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["/specs", "/tests", "/.github", "/CLAUDE.md"]
 
 [dependencies]
 ansi-to-tui = "8.0.1"
@@ -25,3 +35,10 @@ vt100 = "0.16.2"
 opt-level = 3
 [profile.dev.package.similar]
 opt-level = 3
+
+# Released binaries: `gitt` must feel instant, and it ships as a single downloaded file, so trade
+# build time for a smaller, faster artifact.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

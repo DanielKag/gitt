@@ -23,4 +23,9 @@ Each spec is one Markdown file (`specs/<feature>.md`) created from [`_template.m
 
 ## Index
 
-- [`log.md`](./log.md) — `gitt log`: interactive fuzzy git log (POC / feature #1).
+- [`log.md`](./log.md) — `gitt log`: interactive fuzzy git log (`LOG`).
+- [`status.md`](./status.md) — `gitt status`: stage / unstage / discard the working tree (`STAT`).
+- [`commit.md`](./commit.md) — committing and amending from `gitt status` (`CMT`).
+- [`diff.md`](./diff.md) — `gitt diff`: the diff browser and the shared colorized preview (`DIFF`).
+- [`branch.md`](./branch.md) — `gitt branch`: the branch switcher with PR status (`BR`).
+- [`summary.md`](./summary.md) — local AI commit/branch summaries via Ollama (`SUM`).

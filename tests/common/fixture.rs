@@ -109,6 +109,13 @@ impl TempRepo {
         .is_empty()
     }
 
+    /// Create a lightweight tag `name` on the commit with the given subject, so a test can assert on
+    /// how (or whether) tag decorations are rendered.
+    pub fn tag(&self, name: &str, subject: &str) {
+        let sha = self.sha(subject);
+        git(self.work.path(), &["tag", name, &sha], NOW);
+    }
+
     /// A repo with one committed file plus a dirty working tree covering the interesting states:
     /// a staged-new file (`A `), a modified-unstaged tracked file (` M`), and an untracked file
     /// (`??`). `git status` sorts by path, so the list order is deterministic:

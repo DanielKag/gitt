@@ -320,6 +320,37 @@ fn br_17_pr_status_column() {
     tui.wait_exit();
 }
 
+// BR-20: `o` ("only open") narrows the list to branches with an open/draft PR (plus main and the
+// current branch); pressing it again restores the full list.
+#[test]
+fn br_20_only_open_filter() {
+    let repo = TempRepo::with_branches();
+    let fake = r#"[
+        {"headRefName":"wip-parser","state":"OPEN","isDraft":false},
+        {"headRefName":"bugfix","state":"MERGED","isDraft":false}
+    ]"#;
+    let mut tui = Tui::spawn_cmd_env(repo.path(), "branch", &[("GITT_FAKE_PR_JSON", fake)]);
+
+    // Wait for the PR column to fill in, so the filter has data to act on.
+    tui.wait_for("bugfix");
+    tui.wait_for("merged");
+
+    tui.send_str("o");
+    tui.wait_for("[only open]");
+    // bugfix's PR is merged, not open → hidden.
+    tui.wait_until_gone("bugfix");
+    // wip-parser's PR is open → still there.
+    tui.wait_for("wip-parser");
+
+    // Toggling off brings it back.
+    tui.send_str("o");
+    tui.wait_until_gone("[only open]");
+    tui.wait_for("bugfix");
+
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
 // The inline window leaves a git-native footprint on exit: the branch-list chrome is erased and a
 // one-line report of the last action persists (rather than a lingering 20-row blank block).
 #[test]

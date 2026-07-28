@@ -1,0 +1,126 @@
+name: Release
+
+# Tag a release to publish it:
+#   # bump `version` in Cargo.toml, then
+#   git commit -am "Release v0.2.0" && git tag v0.2.0 && git push --follow-tags
+#
+# This builds ONE macOS artifact — a universal binary covering both Apple Silicon and Intel — so the
+# Homebrew formula needs a single url/sha256 with no per-arch branching.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      # Lifted to the job so the tap step can test it in an `if:` (the `secrets` context is not
+      # available there). Empty when the secret is unset — the tap bump then simply doesn't run.
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: v
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$version" != "$cargo_version" ]; then
+            echo "::error::tag $tag does not match Cargo.toml version $cargo_version"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test (unit + e2e)
+        run: cargo test --locked
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
+
+      - name: Build universal binary
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create -output dist/gitt \
+            target/aarch64-apple-darwin/release/gitt \
+            target/x86_64-apple-darwin/release/gitt
+          lipo -info dist/gitt
+          dist/gitt --version
+
+      - name: Package
+        id: pkg
+        run: |
+          name="gitt-${{ steps.v.outputs.version }}-macos-universal.tar.gz"
+          cp README.md LICENSE dist/
+          tar -czf "$name" -C dist gitt README.md LICENSE
+          sha=$(shasum -a 256 "$name" | cut -d' ' -f1)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "### \`$name\`"
+            echo
+            echo "\`sha256: $sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          ASSET: ${{ steps.pkg.outputs.name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber
+          else
+            gh release create "$TAG" "$ASSET" --title "$TAG" --generate-notes
+          fi
+
+      # Bump Formula/gitt.rb in the DanielKag/homebrew-gitt tap so `brew upgrade gitt` picks this up.
+      # Needs a TAP_TOKEN secret: a fine-grained PAT with Contents:write scoped to the tap repo only.
+      # Without it this step is skipped — bump the formula by hand from the sha256 in the job summary.
+      - name: Bump the Homebrew tap
+        if: env.TAP_TOKEN != ''
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          SHA256: ${{ steps.pkg.outputs.sha256 }}
+          ARCHIVE: ${{ steps.pkg.outputs.name }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/DanielKag/homebrew-gitt.git" tap
+          mkdir -p tap/Formula
+          sed -e "s|@VERSION@|${VERSION}|g" \
+              -e "s|@SHA256@|${SHA256}|g" \
+              -e "s|@ARCHIVE@|${ARCHIVE}|g" \
+              packaging/homebrew/gitt.rb.tmpl > tap/Formula/gitt.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/gitt.rb
+          if git diff --cached --quiet; then
+            echo "formula already at ${VERSION}"
+          else
+            git commit -m "gitt ${VERSION}"
+            git push
+          fi

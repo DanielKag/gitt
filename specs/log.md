@@ -1,7 +1,7 @@
 # gitt log — interactive fuzzy git log
 
 - **ID prefix:** `LOG`
-- **Status:** implemented (POC) — LOG-01..18, 21..26 covered by unit + e2e tests; LOG-09 deferred, LOG-20 manual
+- **Status:** implemented — LOG-01..18, 21..30 covered by unit + e2e tests; LOG-20 manual
 - **Command:** `gitt log`
 
 ## Summary
@@ -45,6 +45,9 @@ dependency on the `fzf` binary.
 | LOG-25 | While a filter is active, the substrings that matched are visually highlighted in-place on each shown row (across hash, author, subject, and ref fields), so the user sees *why* a commit matched. | unit       |
 | LOG-26 | `Tab` toggles the diff preview in **search mode** too (not only in list mode), so the user can peek at a diff without leaving the search they're typing. | unit, e2e  |
 | LOG-27 | When an overlay (action menu / confirmation) is open, the base screen behind it is dimmed so the modal stands out. Shared by every screen's overlays (`gitt log`/`status`/`diff`/`branch`). | unit       |
+| LOG-28 | **Tags are never rendered** in the commit list — in a repo with release tags they crowd out the subject and say nothing about the branch you're on. `HEAD`/local/remote decorations are still shown; a commit decorated *only* by tags gets no decoration group at all (no empty `()`). Tags remain **searchable** (they stay in the commit's haystack), so `/v1.0` still finds the tagged commit. | unit, e2e |
+| LOG-29 | Every commit column is padded to a minimum width **and** followed by an explicit separator space, so a value that overflows its column never runs into the next one — `%h` abbreviates to 10+ characters in a large repo and must still be separated from the relative date. | unit      |
+| LOG-30 | The commit row uses `glogm`'s palette one-for-one (bold-dim-cyan hash · green relative date · bold-blue author · default subject) and decorations carry git's own `%C(auto)` colour per kind: `HEAD` cyan, local branch green, remote-tracking red, tag yellow. | unit      |
 
 ## Keybindings / UX
 
@@ -62,6 +65,10 @@ dependency on the `fzf` binary.
 | `Esc`           | Search/Menu | Leave search (keep filter) / close menu       |
 | `Esc`           | List        | Quit (nothing open to dismiss)                |
 | `Tab`           | List/Search | Toggle diff preview                           |
+| `f`             | List        | Expand the diff pane to 90% height            |
+| `Shift-j`/`Shift-k` | List    | Scroll the diff pane down / up                 |
+| `@`             | List        | Generate (or regenerate) the commit's AI summary |
+| `s`             | List        | Expand / minimize the summary footer           |
 | `R`             | List        | Fetch + reload current view (restarts progressive load) |
 | `Enter`         | List        | Open action menu for selected commit          |
 | `j`/`k`,`Enter` | Menu        | Navigate / confirm action                     |

@@ -2,8 +2,14 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::domain::Ref;
+
+// The commit-row palette mirrors `glogm`'s pretty-format one-for-one, so a `glogm` user reads a `gitt
+// log` row without re-learning it: `%C(bold dim cyan)%h  %C(green)%cr  %C(bold blue)%an  %s %C(auto)%d`.
 pub fn hash() -> Style {
-    Style::new().fg(Color::Cyan).add_modifier(Modifier::DIM)
+    Style::new()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD | Modifier::DIM)
 }
 pub fn date() -> Style {
     Style::new().fg(Color::Green)
@@ -14,8 +20,32 @@ pub fn author() -> Style {
 pub fn subject() -> Style {
     Style::new()
 }
-pub fn refs() -> Style {
-    Style::new().fg(Color::Yellow)
+
+// --- ref decorations: git's own `%C(auto)` palette (what `glogm` renders) ------------------------
+/// `HEAD` itself.
+pub fn ref_head() -> Style {
+    Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+}
+/// A local branch.
+pub fn ref_local() -> Style {
+    Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)
+}
+/// A remote-tracking branch.
+pub fn ref_remote() -> Style {
+    Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)
+}
+/// A tag. Tags are not shown in the commit list (LOG-28); kept for any screen that does show one.
+pub fn ref_tag() -> Style {
+    Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+}
+/// The style for one decoration, by kind.
+pub fn ref_style(r: &Ref) -> Style {
+    match r {
+        Ref::Head => ref_head(),
+        Ref::Local(_) => ref_local(),
+        Ref::Remote(_) => ref_remote(),
+        Ref::Tag(_) => ref_tag(),
+    }
 }
 pub fn selected() -> Style {
     Style::new().add_modifier(Modifier::REVERSED)

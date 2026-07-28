@@ -103,7 +103,7 @@ pub fn update_branch(state: &mut BranchState, event: Event) -> Vec<Effect> {
         Event::PrClosed { branch, result } => match result {
             Ok(()) => {
                 state.set_status(format!("Closed PR for {branch}"));
-                state.pr_filter_pinned.insert(branch);
+                state.open_prs_pinned.insert(branch);
                 vec![Effect::LoadPrStatuses]
             }
             Err(e) => {
@@ -114,7 +114,7 @@ pub fn update_branch(state: &mut BranchState, event: Event) -> Vec<Effect> {
         // The background PR fetch landed: overlay the statuses onto the column.
         Event::PrStatusesLoaded(map) => {
             state.pr_statuses = Some(map);
-            if state.pr_filter {
+            if state.open_prs_only {
                 state.recompute_matches();
             }
             vec![]
@@ -206,7 +206,7 @@ fn on_key_list(state: &mut BranchState, key: KeyEvent) -> Vec<Effect> {
             state.clamp_scroll(); // the list viewport just changed size
             vec![]
         }
-        KeyCode::Char('p') => toggle_pr_filter(state),
+        KeyCode::Char('o') => toggle_open_prs_only(state),
         KeyCode::Char('n') => {
             state.mode = BranchMode::Create;
             state.create_input.clear();
@@ -300,12 +300,14 @@ fn quit(state: &mut BranchState) -> Vec<Effect> {
 
 fn reload(state: &mut BranchState) -> Vec<Effect> {
     state.set_status("reloading…");
-    state.pr_filter_pinned.clear();
+    state.open_prs_pinned.clear();
     vec![Effect::LoadBranches, Effect::LoadPrStatuses]
 }
 
-fn toggle_pr_filter(state: &mut BranchState) -> Vec<Effect> {
-    state.pr_filter = !state.pr_filter;
+/// `o` — "only open": narrow the list to branches with an open (or draft) PR, plus main, the current
+/// branch, and any branch whose PR was closed in this session (BR-20).
+fn toggle_open_prs_only(state: &mut BranchState) -> Vec<Effect> {
+    state.open_prs_only = !state.open_prs_only;
     state.recompute_matches();
     vec![]
 }
@@ -961,7 +963,7 @@ mod tests {
         assert_eq!(effects, vec![Effect::LoadPrStatuses]);
         assert_eq!(s.status.as_deref(), Some("Closed PR for wip-parser"));
         assert!(
-            s.pr_filter_pinned.contains("wip-parser"),
+            s.open_prs_pinned.contains("wip-parser"),
             "closed branch is pinned for this session"
         );
     }
@@ -982,9 +984,9 @@ mod tests {
         assert!(s.status_is_error);
     }
 
-    // `p` toggles the PR filter: only branches with open/draft PRs (+ main + current) remain visible.
+    // BR-20: `o` ("only open") narrows to branches with open/draft PRs (+ main + current).
     #[test]
-    fn pr_filter_toggle() {
+    fn open_prs_only_toggle() {
         use crate::domain::PrStatus;
         use std::collections::HashMap;
 
@@ -998,8 +1000,8 @@ mod tests {
         assert_eq!(s.matches.len(), 4);
 
         // Toggle filter on.
-        update_branch(&mut s, ch('p'));
-        assert!(s.pr_filter);
+        update_branch(&mut s, ch('o'));
+        assert!(s.open_prs_only);
         // feature (current) + main + wip-parser (open). bugfix (closed) is hidden.
         assert_eq!(s.matches.len(), 3);
         let names: Vec<_> = s
@@ -1013,14 +1015,25 @@ mod tests {
         assert!(!names.contains(&"bugfix"), "closed PR branch hidden");
 
         // Toggle filter off: all 4 visible again.
-        update_branch(&mut s, ch('p'));
-        assert!(!s.pr_filter);
+        update_branch(&mut s, ch('o'));
+        assert!(!s.open_prs_only);
         assert_eq!(s.matches.len(), 4);
     }
 
-    // PR filter with draft PRs: drafts are included alongside open.
+    // BR-20: `p` is not the toggle (and is not bound to anything else) — a stale muscle-memory press
+    // must be an inert no-op rather than silently filtering the list.
     #[test]
-    fn pr_filter_includes_drafts() {
+    fn open_prs_only_is_not_bound_to_p() {
+        let mut s = app();
+        let effects = update_branch(&mut s, ch('p'));
+        assert!(!s.open_prs_only, "`p` does not toggle the only-open filter");
+        assert!(effects.is_empty(), "`p` is an inert no-op in the list");
+        assert_eq!(s.matches.len(), 4, "the list is untouched");
+    }
+
+    // Only-open with draft PRs: drafts are included alongside open.
+    #[test]
+    fn open_prs_only_includes_drafts() {
         use crate::domain::PrStatus;
         use std::collections::HashMap;
 
@@ -1029,7 +1042,7 @@ mod tests {
         map.insert("bugfix".to_string(), PrStatus::Draft);
         s.pr_statuses = Some(map);
 
-        update_branch(&mut s, ch('p'));
+        update_branch(&mut s, ch('o'));
         let names: Vec<_> = s
             .matches
             .iter()
@@ -1045,7 +1058,7 @@ mod tests {
         use std::collections::HashMap;
 
         let mut s = app();
-        s.pr_filter = true;
+        s.open_prs_only = true;
         // No statuses yet: all branches pass through (no data to filter on).
         s.recompute_matches();
         assert_eq!(s.matches.len(), 2); // only current + main (no PR data means no open/draft match)
@@ -1059,7 +1072,7 @@ mod tests {
 
     // A branch whose PR was closed during this session stays visible under the PR filter.
     #[test]
-    fn pr_filter_pinned_branch_stays_visible() {
+    fn open_prs_pinned_branch_stays_visible() {
         use crate::domain::PrStatus;
         use std::collections::HashMap;
 
@@ -1069,17 +1082,17 @@ mod tests {
         s.pr_statuses = Some(map);
 
         // Turn on filter — wip-parser (closed) is hidden.
-        update_branch(&mut s, ch('p'));
+        update_branch(&mut s, ch('o'));
         assert_eq!(s.matches.len(), 2); // feature + main only
 
         // Pin wip-parser (simulates a PrClosed event).
-        s.pr_filter_pinned.insert("wip-parser".to_string());
+        s.open_prs_pinned.insert("wip-parser".to_string());
         s.recompute_matches();
         assert_eq!(s.matches.len(), 3, "pinned branch survives the filter");
 
         // Reload clears pinned set.
         update_branch(&mut s, ch('R'));
-        assert!(s.pr_filter_pinned.is_empty(), "reload clears pins");
+        assert!(s.open_prs_pinned.is_empty(), "reload clears pins");
     }
 
     // Reload keeps the previously-selected branch under the cursor when it still exists.

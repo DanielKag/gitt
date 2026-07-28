@@ -25,13 +25,13 @@ distinct commits never collide.
 | ------- | ----------------------------------------------------------------------------------------------------------------------- | ---------- |
 | SUM-01  | `gitt log` always renders a bordered "ai summary" panel below the commit list; its content reflects the **selected** commit's summary state. | unit, e2e  |
 | SUM-02  | Selecting a commit auto-loads its summary from the on-disk cache (keyed by the commit's full SHA); a cache **hit** displays immediately, with no AI call. | unit, e2e  |
-| SUM-03  | When no summary is cached, the panel shows a hint to press `s`; the reducer emits a cache-load effect once per commit and records the miss. | unit       |
-| SUM-04  | Pressing `s` on the selected commit starts generation off the UI thread; the model's tokens **stream** into the panel as they arrive (a "summarizing…" placeholder shows until the first token). All progress/results show in the panel — the status line keeps showing the keymap legend. | unit, e2e  |
+| SUM-03  | When no summary is cached, the panel shows a hint to press `@`; the reducer emits a cache-load effect once per commit and records the miss. | unit       |
+| SUM-04  | Pressing `@` on the selected commit starts generation off the UI thread; the model's tokens **stream** into the panel as they arrive (a "summarizing…" placeholder shows until the first token). All progress/results show in the panel — the status line keeps showing the keymap legend. | unit, e2e  |
 | SUM-05  | The generation prompt is built by a **pure** function from a system instruction + the commit subject + its diff; the diff is truncated to a bounded number of lines. | unit       |
 | SUM-06  | A completed generation shows the model's summary in the panel and writes it to the cache directory under the user's home, keyed by the commit SHA, so a later run reuses it without calling Ollama. | unit, e2e  |
 | SUM-07  | Generation calls Ollama's HTTP API (`POST /api/generate`, streaming) with model `qwen3-coder:30b` by default (overridable via `GITT_OLLAMA_MODEL`) at `http://127.0.0.1:11434` (overridable via `OLLAMA_HOST`); the clean `response` text is used (not `ollama run`, whose piped output carries terminal control codes). | unit (model + URL resolution), manual |
 | SUM-08  | A generation failure (Ollama missing or erroring) surfaces in the panel as a failed state without crashing; pressing `s` again retries. | unit, e2e  |
-| SUM-09  | Pressing `s` while a summary is already generating for the selected commit is ignored (no duplicate effect / AI call).  | unit       |
+| SUM-09  | Pressing `@` while a summary is already generating for the selected commit is ignored (no duplicate effect / AI call).  | unit       |
 | SUM-10  | The cache directory resolves as `GITT_CACHE_DIR` → `$XDG_CACHE_HOME/gitt/summaries` → `$HOME/.cache/gitt/summaries`.    | unit       |
 | SUM-11  | A list entry (commit in `gitt log`, branch in `gitt branch`) whose summary is cached (`Ready`) shows a one-character AI marker (`✦`) in a leading column; entries without a cached summary reserve the same width blank so rows stay aligned. | unit       |
 | SUM-12  | Markdown `code` spans (backtick pairs) render styled (backticks stripped) identically in **both** the collapsed teaser and the expanded footer — the teaser is the expanded view cut to fit, not plain text. | unit       |
@@ -46,7 +46,7 @@ The summary panel is always visible in `gitt log`; it reserves a fixed number of
 commit list (the list's page/scroll math accounts for it). Panel states:
 
 - **cached / generated** → the summary text (wrapped).
-- **not cached** → dim hint: `press s for an AI summary`.
+- **not cached** → dim hint: `press @ for an AI summary`.
 - **generating** → `summarizing with ollama…` until the first token, then the streaming text.
 - **failed** → `summary failed: <reason>` (retry with `s`).
 

@@ -6,7 +6,7 @@ expression: "render_to_string(&s, 80, 12)"
 Search:   (3 matches)
   aaaaaaa 3 days ago    Ada Lovelace     add fuzzy search (HEAD, feature)
   bbbbbbb 5 days ago    Bo               fix flaky test
-  ccccccc 2 weeks ago   Cy               refactor parser (v1.0)
+  ccccccc 2 weeks ago   Cy               refactor parser
 
 
 ┌ai summary────────────────────────────────────────────────────────────────────┐

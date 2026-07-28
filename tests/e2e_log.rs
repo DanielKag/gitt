@@ -22,6 +22,29 @@ fn log_01_18_renders_log_and_quits() {
     tui.wait_exit();
 }
 
+// LOG-28: a tag decoration is never rendered in the list, but the tag is still searchable.
+#[test]
+fn log_28_tags_are_not_rendered_but_stay_searchable() {
+    let repo = TempRepo::with_graph();
+    repo.tag("v9.9.9", "refactor parser");
+    let mut tui = Tui::spawn(repo.path());
+
+    tui.wait_for("refactor parser");
+    // The tag never appears as a decoration on that row.
+    tui.wait_until_gone("v9.9.9");
+
+    // …yet searching for it still finds the tagged commit (it stays in the haystack).
+    tui.send_str("/");
+    tui.send_str("v9.9.9");
+    tui.wait_for("refactor parser");
+    tui.wait_until_gone("local only change");
+
+    // Leave search mode first — in Search, `q` would just be another filter character.
+    tui.enter();
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
 // LOG-21: the log loads progressively in small pages (GITT_LOG_PAGE=2 here), yet search still
 // reaches the OLDEST commit — which only lands after several background pages stream in behind the
 // instant first paint.

@@ -58,8 +58,8 @@ fn render_search(frame: &mut Frame, area: Rect, state: &BranchState) {
     }
     let count = format!("  ({} matches)", state.matches.len());
     left.push(Span::styled(count, theme::dim()));
-    if state.pr_filter {
-        left.push(Span::styled("  [PR filter]", theme::staged()));
+    if state.open_prs_only {
+        left.push(Span::styled("  [only open]", theme::staged()));
     }
     if let Some(msg) = &state.status {
         let style = if state.status_is_error {
@@ -186,7 +186,8 @@ fn pr_span(pr: Option<PrStatus>, pr_loaded: bool) -> Span<'static> {
 }
 
 fn render_status(frame: &mut Frame, area: Rect, _state: &BranchState) {
-    let text = "j/k · /search · @ summary · p PRs · n new · d delete · Enter · R reload · q quit";
+    // Kept under 80 columns so `q quit` survives on a narrow terminal (hence `d del`, not `d delete`).
+    let text = "j/k · /search · @ summary · o open · n new · d del · Enter · R reload · q quit";
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
 

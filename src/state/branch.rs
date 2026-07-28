@@ -118,10 +118,10 @@ pub struct BranchState {
     /// succeeds (so the column is blank rather than falsely "none" while unknown/unavailable).
     pub pr_statuses: Option<HashMap<String, PrStatus>>,
     /// When true, show only branches with an open/draft PR (plus the main and current branch).
-    pub pr_filter: bool,
+    pub open_prs_only: bool,
     /// Branches whose PRs were closed during this session — kept visible under the PR filter so the
     /// user can see the status change. Cleared on reload (`R`) or next launch.
-    pub pr_filter_pinned: HashSet<String>,
+    pub open_prs_pinned: HashSet<String>,
     /// When true, the summary footer grows to show the selected branch's full summary (toggled by `S`).
     pub summary_expanded: bool,
     /// Transient status-line message.
@@ -149,8 +149,8 @@ impl BranchState {
             create_input: String::new(),
             summaries: HashMap::new(),
             pr_statuses: None,
-            pr_filter: false,
-            pr_filter_pinned: HashSet::new(),
+            open_prs_only: false,
+            open_prs_pinned: HashSet::new(),
             summary_expanded: false,
             status: None,
             status_is_error: false,
@@ -224,13 +224,13 @@ impl BranchState {
     /// Recompute matches for the current filter (+ PR filter when active), then re-clamp cursor and scroll.
     pub fn recompute_matches(&mut self) {
         self.matches = fuzzy::filter_items(self.branches(), &self.filter, |b| b.haystack.as_str());
-        if self.pr_filter
+        if self.open_prs_only
             && let BranchLoad::Loaded(branches) = &self.load
         {
             let pr_statuses = &self.pr_statuses;
             let main = &self.main_branch;
             let current = &self.current_branch;
-            let pinned = &self.pr_filter_pinned;
+            let pinned = &self.open_prs_pinned;
             let branches = branches.as_slice();
             self.matches.retain(|m| {
                 let Some(b) = branches.get(m.commit_idx) else {

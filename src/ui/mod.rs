@@ -23,6 +23,9 @@ pub use status::draw_status;
 
 use components::{ai_badge_span, dim_area, highlight, overlay_menu, preview_pane, truncate};
 
+/// Minimum width of the abbreviated-hash column. `%h` is 7 chars in a small repo but grows with
+/// history size, so this is a floor, not a cap — the separator space is always added on top.
+const HASH_WIDTH: usize = 7;
 const DATE_WIDTH: usize = 13;
 const AUTHOR_WIDTH: usize = 16;
 
@@ -181,8 +184,12 @@ fn render_list(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(List::new(items), area);
 }
 
-/// Build one commit's display line: `<ai> hash  date  author  subject (refs)`. The leading column is
-/// the one-char AI-summary marker (present only when this commit's summary is cached). When a search
+/// Build one commit's display line: `<ai> hash date author subject (refs)`. The leading column is
+/// the one-char AI-summary marker (present only when this commit's summary is cached). Every column
+/// is padded to a minimum width and then followed by an explicit separator space, so the columns stay
+/// aligned *and* never run together when a value overflows its width — `%h` abbreviates to 10+ chars
+/// in a large repo, which used to glue the hash onto the date (LOG-29). Tags are omitted (LOG-28) and
+/// the remaining decorations carry git's own `%C(auto)` colour per kind (LOG-30). When a search
 /// `query` is active, the substrings it matched are highlighted in the searchable fields (LOG-25);
 /// the date is not searchable, so it's never highlighted.
 fn commit_line(c: &Commit, query: &str, summarized: bool) -> Line<'static> {
@@ -193,7 +200,12 @@ fn commit_line(c: &Commit, query: &str, summarized: bool) -> Line<'static> {
     );
 
     let mut spans = vec![ai_badge_span(summarized), Span::raw(" ")];
-    spans.extend(highlight(&format!("{:<8}", c.short), query, theme::hash()));
+    spans.extend(highlight(
+        &format!("{:<w$}", c.short, w = HASH_WIDTH),
+        query,
+        theme::hash(),
+    ));
+    spans.push(Span::raw(" "));
     spans.push(Span::styled(
         format!("{:<w$}", truncate(&c.relative, DATE_WIDTH), w = DATE_WIDTH),
         theme::date(),
@@ -202,21 +214,27 @@ fn commit_line(c: &Commit, query: &str, summarized: bool) -> Line<'static> {
     spans.extend(highlight(&author, query, theme::author()));
     spans.push(Span::raw(" "));
     spans.extend(highlight(&c.subject, query, theme::subject()));
-    if !c.refs.is_empty() {
-        spans.extend(highlight(
-            &format!(" ({})", refs_label(&c.refs)),
-            query,
-            theme::refs(),
-        ));
-    }
+    spans.extend(decoration_spans(&c.refs, query));
     Line::from(spans)
 }
 
-fn refs_label(refs: &[Ref]) -> String {
-    refs.iter()
-        .map(|r| r.label())
-        .collect::<Vec<_>>()
-        .join(", ")
+/// The trailing ` (HEAD, feature, origin/feature)` decoration group, each ref in its own `%C(auto)`
+/// colour. Tags are dropped — in a repo with release tags they crowd out the subject and say nothing
+/// about the branch you're on (LOG-28) — so a commit decorated *only* by tags gets no group at all.
+fn decoration_spans(refs: &[Ref], query: &str) -> Vec<Span<'static>> {
+    let shown: Vec<&Ref> = refs.iter().filter(|r| !matches!(r, Ref::Tag(_))).collect();
+    if shown.is_empty() {
+        return vec![];
+    }
+    let mut spans = vec![Span::raw(" (")];
+    for (i, r) in shown.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(", "));
+        }
+        spans.extend(highlight(r.label(), query, theme::ref_style(r)));
+    }
+    spans.push(Span::raw(")"));
+    spans
 }
 
 fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -230,7 +248,8 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_status(frame: &mut Frame, area: Rect, _state: &AppState) {
-    let text = "j/k · /search · Tab preview · @ summary · s expand · ←/→ view · Enter · R fetch · q quit";
+    let text =
+        "j/k · /search · Tab preview · @ summary · s expand · ←/→ view · Enter · R fetch · q quit";
     frame.render_widget(Paragraph::new(Line::styled(text, theme::dim())), area);
 }
 
@@ -669,6 +688,116 @@ mod tests {
             hl.bg.unwrap(),
             "non-matched char keeps its normal background"
         );
+    }
+
+    // LOG-28: tag decorations are noise in a busy repo — they are never shown, while HEAD / local /
+    // remote decorations still are.
+    #[test]
+    fn log_28_tags_are_not_shown() {
+        let mut s = app();
+        s.logs.insert(
+            View::LocalHead,
+            Load::Loaded(vec![
+                commit(
+                    "aaaaaaa",
+                    "3 days ago",
+                    "Ada",
+                    "tagged release",
+                    vec![Ref::Tag("v1.0".into())],
+                ),
+                commit(
+                    "bbbbbbb",
+                    "5 days ago",
+                    "Bo",
+                    "tip",
+                    vec![
+                        Ref::Head,
+                        Ref::Local("feature".into()),
+                        Ref::Tag("v0.9".into()),
+                    ],
+                ),
+            ]),
+        );
+        s.recompute_matches();
+        let out = render_to_string(&s, 80, 12);
+        assert!(!out.contains("v1.0"), "tags are not rendered:\n{out}");
+        assert!(!out.contains("v0.9"), "tags are not rendered:\n{out}");
+        assert!(
+            out.contains("tagged release") && !out.contains("tagged release ("),
+            "a tag-only commit shows no empty decoration parens:\n{out}"
+        );
+        assert!(
+            out.contains("tip (HEAD, feature)"),
+            "non-tag decorations are still shown:\n{out}"
+        );
+    }
+
+    // LOG-29: the hash column is always separated from the relative date by a space, whatever
+    // abbreviation length this repo's `%h` yields (a monorepo abbreviates to 10+ chars).
+    #[test]
+    fn log_29_space_between_hash_and_date() {
+        let mut s = app();
+        s.logs.insert(
+            View::LocalHead,
+            Load::Loaded(vec![commit(
+                "8542872014", // 10-char abbrev, as in a large repo
+                "3 days ago",
+                "Ada",
+                "wide hash",
+                vec![],
+            )]),
+        );
+        s.recompute_matches();
+        let out = render_to_string(&s, 80, 12);
+        assert!(
+            out.contains("8542872014 3 days ago"),
+            "a long abbrev hash is still followed by a separator space:\n{out}"
+        );
+    }
+
+    // LOG-30: decorations use git's own `%C(auto)` palette (as `glogm` does): HEAD cyan, local
+    // branch green, remote-tracking red — not one flat colour for every ref.
+    #[test]
+    fn log_30_decorations_use_git_auto_colors() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut s = app();
+        s.logs.insert(
+            View::LocalHead,
+            Load::Loaded(vec![commit(
+                "aaaaaaa",
+                "3 days ago",
+                "Ada",
+                "tip",
+                vec![
+                    Ref::Head,
+                    Ref::Local("feature".into()),
+                    Ref::Remote("origin/feature".into()),
+                ],
+            )]),
+        );
+        s.recompute_matches();
+
+        let screen = render_to_string(&s, 80, 12);
+        let (y, line) = screen
+            .lines()
+            .enumerate()
+            // "tip" anchors on the commit row — the header row also carries a "(HEAD)".
+            .find(|(_, l)| l.contains("tip (HEAD"))
+            .map(|(y, l)| (y as u16, l.to_string()))
+            .expect("the decorated commit is shown");
+
+        let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        term.draw(|f| draw(f, &s)).unwrap();
+        let buf = term.backend().buffer();
+        let fg_at = |needle: &str| {
+            let x = line.find(needle).expect("decoration is present") as u16;
+            buf[(x, y)].fg
+        };
+        assert_eq!(fg_at("HEAD"), theme::ref_head().fg.unwrap());
+        assert_eq!(fg_at("feature,"), theme::ref_local().fg.unwrap());
+        assert_eq!(fg_at("origin/feature"), theme::ref_remote().fg.unwrap());
     }
 
     // A commit whose summary is cached carries the one-char AI marker; a commit that is only

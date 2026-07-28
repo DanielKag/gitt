@@ -31,8 +31,8 @@ the cache distinctly from commit summaries so the two never collide.
 | BR-08  | "Copy name" copies the selected branch name to the clipboard.                                                      | unit, e2e  |
 | BR-09  | "Delete branch" is gated by the shared confirmation overlay; `y`/`Enter` deletes and the list reloads, `n`/`Esc` cancels. Deleting the **current** branch is refused with a friendly status (git can't delete the checked-out branch). | unit, e2e  |
 | BR-10  | `n` opens a "new branch" input; typing a name and pressing `Enter` creates the branch off `HEAD`, switches to it, and reloads the list; `Esc` cancels; an empty name is a no-op. | unit, e2e  |
-| BR-11  | `gitt branch` always renders a bordered "ai summary" panel below the list reflecting the **selected** branch. Selecting a branch auto-loads its summary from the on-disk cache (keyed by the branch tip SHA, prefixed so it never collides with a commit summary); a hit shows instantly, a miss shows the "press s" hint. | unit, e2e  |
-| BR-12  | Pressing `s` generates the branch summary off the UI thread (streaming into the panel); `S` toggles the expanded footer — identical behavior and rendering to `gitt log`'s summary. All progress/results show in the panel; the status line keeps the keymap legend. | unit, e2e  |
+| BR-11  | `gitt branch` always renders a bordered "ai summary" panel below the list reflecting the **selected** branch. Selecting a branch auto-loads its summary from the on-disk cache (keyed by the branch tip SHA, prefixed so it never collides with a commit summary); a hit shows instantly, a miss shows the "press @" hint. | unit, e2e  |
+| BR-12  | Pressing `@` generates the branch summary off the UI thread (streaming into the panel); `s` toggles the expanded footer — identical behavior and rendering to `gitt log`'s summary. All progress/results show in the panel; the status line keeps the keymap legend. | unit, e2e  |
 | BR-13  | The branch-summary prompt is built by a **pure** function from a system instruction + the base branch name + the branch's commit subjects + its (size-bounded) diff against the base. | unit       |
 | BR-14  | A branch with no commits ahead of the base short-circuits to a friendly "no changes" summary without calling the model. | unit       |
 | BR-15  | `R` reloads the branch list; `q` / `Ctrl-c` quit cleanly; running outside a git repository prints a clear error and exits non-zero (no TUI). | unit, e2e  |
@@ -40,6 +40,7 @@ the cache distinctly from commit summaries so the two never collide.
 | BR-17  | A per-branch PR-status column is filled from a single background `gh` fetch (open/draft/merged/closed, coloured), which never blocks the first paint. Until it lands the column reads `loading…`; a branch with no PR shows a dim `—`. | unit, e2e  |
 | BR-18  | `gitt branch` opens in a small **inline window** (a fixed 20-row viewport in the current terminal) rather than taking over the whole screen, leaving the surrounding scrollback intact. On exit it leaves a git-native footprint: the UI is erased, the last action is printed as a one-line report, and the shell prompt resumes on the next line (no lingering blank block). | unit, e2e  |
 | BR-19  | A branch whose AI summary is cached shows a one-character AI marker (`✦`) in a leading column; branches without a cached summary show a blank of the same width so rows stay aligned. Shared with `gitt log`. | unit       |
+| BR-20  | `o` ("**o**nly open") toggles a filter down to branches with an **open or draft** PR, plus `main`, the current branch, and any branch whose PR was closed during this session. While active the search bar shows an `[only open]` badge. `p` is **not** bound — a stale press is an inert no-op. | unit, e2e  |
 
 ## Keybindings / UX
 
@@ -55,10 +56,11 @@ the cache distinctly from commit summaries so the two never collide.
 | `Backspace`       | Search      | Delete last filter char                       |
 | `Esc`             | Search      | Leave search (keep filter)                    |
 | `Esc`             | List        | Quit (nothing open to dismiss)                |
+| `o`               | List        | Only open: filter to branches with an open PR |
 | `n`               | List        | Create a new branch (opens the name input)    |
 | `d`               | List        | Delete the selected branch (opens confirm)    |
-| `s`               | List        | Generate (or regenerate) the branch's AI summary |
-| `S`               | List        | Expand / minimize the summary footer          |
+| `@`               | List        | Generate (or regenerate) the branch's AI summary |
+| `s`               | List        | Expand / minimize the summary footer          |
 | `R`               | List        | Reload the branch list                        |
 | `Enter`           | List        | Open the action menu for the selected branch  |
 | `j`/`k`,`Enter`   | Menu        | Navigate / confirm action                     |
@@ -72,7 +74,7 @@ list — so pressing `Esc` repeatedly always walks you out (alongside `q`).
 
 The layout mirrors `gitt log`, minus the header row: search bar · branch list · AI-summary footer ·
 status line. The summary footer states are identical to `gitt log`'s (hint / generating / streaming / ready /
-failed), and `S` expands it in place.
+failed), and `s` expands it in place.
 
 ## Errors / edge cases
 

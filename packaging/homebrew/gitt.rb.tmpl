@@ -1,0 +1,28 @@
+# Template for the Homebrew formula published to the DanielKag/homebrew-gitt tap.
+# The release workflow substitutes @VERSION@ / @ARCHIVE@ / @SHA256@ and commits the result as
+# Formula/gitt.rb in that tap. Users then get it with:
+#
+#   brew tap DanielKag/gitt && brew install gitt
+#
+# The bottle is a single macOS universal binary (arm64 + x86_64), so there is no per-arch branching.
+class Gitt < Formula
+  desc "Git-ty - an interactive git TUI: fuzzy log, staging, diffs, and branches"
+  homepage "https://github.com/DanielKag/gitt"
+  url "https://github.com/DanielKag/gitt/releases/download/v@VERSION@/@ARCHIVE@"
+  sha256 "@SHA256@"
+  license "MIT"
+  version "@VERSION@"
+
+  depends_on :macos
+
+  def install
+    bin.install "gitt"
+  end
+
+  test do
+    assert_match "gitt #{version}", shell_output("#{bin}/gitt --version")
+    # Outside a repository every subcommand must fail loudly instead of opening a TUI.
+    output = shell_output("#{bin}/gitt log 2>&1", 1)
+    assert_match "not a git repository", output
+  end
+end

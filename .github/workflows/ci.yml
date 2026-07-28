@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    # gitt ships for macOS only, and its e2e tests drive the real binary over a PTY — so the only
+    # platform worth gating on is the one users run.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # E2E tests spawn the compiled binary against throwaway repos, so git must be isolated the same
+      # way the harness expects: no global/system config leaking in from the runner image.
+      - name: Test (unit + e2e)
+        run: cargo test --locked
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
