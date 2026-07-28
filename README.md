@@ -1,6 +1,8 @@
 # gitt
 
-**An interactive git client for the terminal.** Pronounced *"Git-ty"*.
+### Pronounced **“Git-T”** — `git` plus the letter *T* (“git-tee”).
+
+**An interactive git client for the terminal.**
 
 `gitt` replaces the git commands you run twenty times a day with visible, navigable screens: fuzzy-find
 a commit, stage a hunk-by-hunk mess, read a colorized diff, jump between branches — without
