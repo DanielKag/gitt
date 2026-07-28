@@ -1,6 +1,6 @@
 # gitt — AI-first git TUI client
 
-`gitt` (pronounced "Git-T" — `git` plus the letter *T*) is a terminal UI git client that replaces native git operations with
+`gitt` (pronounced "git-tee") is a terminal UI git client that replaces native git operations with
 interactive, visible flows. It is **AI-first, spec-driven, and TDD-driven**: every feature begins as
 a spec in `specs/`, is covered by unit **and** e2e tests, and is developed and tested entirely by AI.
 

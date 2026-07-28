@@ -16,7 +16,11 @@ use gitt::runtime;
 use gitt::state::{AppState, BranchState, DiffState, StatusState};
 
 #[derive(Parser)]
-#[command(name = "gitt", version, about = "Git-ty — an interactive git TUI")]
+#[command(
+    name = "gitt",
+    version,
+    about = "gitt (\"git-tee\") — an interactive git client for the terminal"
+)]
 struct Cli {
     /// Third-party renderer for colorized diff previews: `difftastic`, `delta`, `git-split-diffs`,
     /// or `none`. Defaults to `$GITT_DIFF_TOOL`, else the first one installed on PATH.

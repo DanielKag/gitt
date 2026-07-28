@@ -1,11 +1,9 @@
-# gitt
-
-### Pronounced **“Git-T”** — `git` plus the letter *T* (“git-tee”).
+# gitt (“git-tee”)
 
 **An interactive git client for the terminal.**
 
 `gitt` replaces the git commands you run twenty times a day with visible, navigable screens: fuzzy-find
-a commit, stage a hunk-by-hunk mess, read a colorized diff, jump between branches — without
+a commit, stage what you meant to stage, read a colorized diff, jump between branches — without
 memorizing another flag. It's a single Rust binary, it starts instantly, and it leaves your terminal
 exactly as a native git command would.
 
@@ -21,15 +19,15 @@ gitt branch   # switch, create, delete branches; see each one's PR status
 ## Install
 
 ```bash
-brew tap DanielKag/gitt
-brew trust DanielKag/gitt   # Homebrew 6+ requires this for any third-party tap
+brew tap danielkag/gitt
+brew trust danielkag/gitt   # Homebrew 6+ requires this for any third-party tap
 brew install gitt
 ```
 
 Or build from source (Rust 1.85+, edition 2024):
 
 ```bash
-cargo install --locked --git https://github.com/DanielKag/gitt
+cargo install --locked --git https://github.com/danielkag/gitt
 ```
 
 macOS only for now. Requires `git`; `gh` is optional (PR status and "open PR").
@@ -38,37 +36,40 @@ macOS only for now. Requires `git`; `gh` is optional (PR status and "open PR").
 
 ## The four screens
 
+Every screen prints its own keymap along the bottom, so you never have to come back here to use one.
+
 ### `gitt log`
 
-An interactive `git log` with the palette of [`glogm`](https://github.com/DanielKag/glogm): dim-cyan
-hash, green relative date, blue author, then the subject. History loads **progressively** — the first
-page paints immediately and the rest streams in behind it, so a monorepo feels the same as a toy repo.
+Finding the commit you're thinking of. Type a few fragments — part of a message, a teammate's name,
+half a SHA — and the list narrows as you type, showing you which characters matched. From there you can
+read its diff, check it out, grab the full SHA, or open its PR. History streams in progressively, so a
+monorepo opens as fast as a toy repo. Colors follow [`glogm`](https://github.com/danielkag/glogm).
 
-Type `/` and search: every whitespace-separated term must appear as a literal substring (smart-case) of
-the hash, author, subject, or branch decoration — and the matched characters are highlighted in place,
-so you can see *why* a commit matched. `Enter` opens the action menu: open in GitHub, open the PR,
-copy the full SHA, checkout, copy a revert command.
+![gitt log](docs/images/log.png)
 
 ### `gitt status`
 
-The working tree as a list. `Space` toggles staging for the file under the cursor, `s`/`u` stage and
-unstage explicitly, `d` discards (behind a confirmation), `Tab` previews the file's diff. `c` commits
-and `a` amends: `gitt` hands the commit off to your real terminal, so pre-commit hooks stream their
-output live and a failure stays on screen where you can re-run it.
+Deciding what goes into this commit. Your working tree as one list, each file's diff a keypress away,
+staging and unstaging as you review. When you commit or amend, `gitt` hands off to your real terminal —
+so pre-commit hooks stream their output live and a failure stays on screen where you can re-run it.
+
+![gitt status](docs/images/status.png)
 
 ### `gitt diff`
 
-A read-only diff browser over four scopes — unstaged, staged, whole working tree, and `main...HEAD`
-(the PR view). `←`/`→` switches scope, `Tab` opens the pane, `f` expands it to most of the screen,
-`Shift-j`/`Shift-k` scroll it.
+Reading changes before you commit or push. Four scopes you can flip between: unstaged, staged, the whole
+working tree, and `main...HEAD` — the last one being what your reviewer will see.
+
+![gitt diff](docs/images/diff.png)
 
 ### `gitt branch`
 
-Your local branches, current one pinned first, each with the status of its PR (open / draft / merged /
-closed) fetched in the background. `o` narrows the list to branches with an **o**pen PR — the ones you
-actually still care about. `Enter` checks out, opens the PR, copies the name, or deletes. It renders in
-a small inline window rather than taking over the screen, and on exit it erases itself and prints one
-line saying what it did.
+Getting back to the branch you were on. Your local branches with the current one pinned first, each
+showing the state of its PR (open / draft / merged / closed), so you can filter down to the work that's
+still live. Opens as a small inline window instead of taking over the screen, and on exit it erases
+itself and prints one line saying what it did.
+
+![gitt branch](docs/images/branch.png)
 
 ---
 
@@ -79,20 +80,15 @@ A key means the same thing on every screen.
 | Key | Action |
 | --- | --- |
 | `j` / `k` · `↓` / `↑` | Move the selection |
-| `g` / `G` | Jump to top / bottom |
-| `Ctrl-d` / `Ctrl-u` | Half page down / up |
-| `Ctrl-f` / `Ctrl-b` | Page down / up |
 | `/` | Search (type to filter; `Esc` leaves search, keeps the filter) |
-| `Tab` | Toggle the diff preview |
-| `f` · `Shift-j` / `Shift-k` | Expand · scroll the diff pane |
-| `←` / `→` | Switch view (log) or diff scope |
 | `Enter` | Open the action menu for the selected row |
-| `R` | Reload (fetch, in `gitt log`) |
+| `Tab` | Toggle the diff preview |
 | `Esc` | Dismiss whatever is open — and quit from the base list |
-| `q` / `Ctrl-c` | Quit |
-
-Screen-specific: `Space`/`s`/`u`/`d`/`c`/`a` in `status` · `o`/`n`/`d` in `branch` · `@` and `s` for AI
-summaries.
+| `q` | Quit |
+| `←` / `→` | Switch view (log) or diff scope |
+| `g` / `G` | Jump to top / bottom |
+| `R` | Reload (fetch, in `gitt log`) |
+| `f` · `Shift-j` / `Shift-k` | Expand · scroll the diff pane |
 
 ---
 
@@ -106,20 +102,29 @@ gitt diff --diff-tool difftastic     # or delta, git-split-diffs, none
 export GITT_DIFF_TOOL=delta          # or set it once
 ```
 
-## AI commit & branch summaries (optional)
+---
 
-Press `@` on a commit (`gitt log`) or a branch (`gitt branch`) for a plain-English summary of what it
-changed. It runs **locally** through [Ollama](https://ollama.com) — nothing leaves your machine — and
-is cached on disk by SHA, so a summary you've seen once appears instantly. `s` expands the panel.
+## Local AI summaries (optional)
 
-Without Ollama running, the panel says so and everything else keeps working.
+`gitt` can tell you what a commit or a branch actually *did*, in a sentence, when the message doesn't.
+Press `@` on any row and a summary streams into the panel below the list; `s` expands it.
+
+This is off unless you opt in, and it stays on your machine — the model runs locally via
+[Ollama](https://ollama.com), so no diff is ever sent anywhere. Set it up once:
+
+```bash
+brew install ollama && ollama serve
+ollama pull qwen3-coder:30b
+```
+
+Every summary is cached on disk by SHA, so one you've already read appears instantly and costs nothing
+the second time. Without Ollama running, the panel just says so — nothing else changes.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GITT_OLLAMA_MODEL` | `qwen3-coder:30b` | Model used for summaries |
-| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Where Ollama listens |
-| `GITT_CACHE_DIR` | `$XDG_CACHE_HOME/gitt/summaries` | Summary cache location |
-| `GITT_DIFF_TOOL` | auto-detected | Diff renderer |
+| `GITT_OLLAMA_MODEL` | `qwen3-coder:30b` | Which model writes the summaries |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Where Ollama is listening |
+| `GITT_CACHE_DIR` | `$XDG_CACHE_HOME/gitt/summaries` | Where summaries are cached |
 
 ---
 

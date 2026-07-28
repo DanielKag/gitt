@@ -6,22 +6,22 @@ Homebrew tap. Everything below the one-time setup is automated by
 
 ## One-time setup
 
-1. **Push the code** to `github.com/DanielKag/gitt` (public). CI runs on macOS: `fmt`, `clippy`,
+1. **Push the code** to `github.com/danielkag/gitt` (public). CI runs on macOS: `fmt`, `clippy`,
    unit + e2e tests.
 
-2. **Create the tap repo** — Homebrew resolves `DanielKag/gitt` to the repo `homebrew-gitt`, so the
+2. **Create the tap repo** — Homebrew resolves `danielkag/gitt` to the repo `homebrew-gitt`, so the
    name matters:
 
    ```bash
-   gh repo create DanielKag/homebrew-gitt --public \
+   gh repo create danielkag/homebrew-gitt --public \
      --description "Homebrew tap for gitt" --add-readme
    ```
 
 3. **Let releases bump the tap.** Create a fine-grained PAT with **Contents: read and write** scoped
-   to `DanielKag/homebrew-gitt` only, then add it to the main repo:
+   to `danielkag/homebrew-gitt` only, then add it to the main repo:
 
    ```bash
-   gh secret set TAP_TOKEN --repo DanielKag/gitt
+   gh secret set TAP_TOKEN --repo danielkag/gitt
    ```
 
    Without this secret the release still publishes; only the formula bump is skipped (see
@@ -50,8 +50,8 @@ The workflow then:
 Users get it with:
 
 ```bash
-brew tap DanielKag/gitt
-brew trust DanielKag/gitt          # Homebrew 6+ gate on third-party taps
+brew tap danielkag/gitt
+brew trust danielkag/gitt          # Homebrew 6+ gate on third-party taps
 brew install gitt                  # or `brew upgrade gitt`
 ```
 
@@ -60,16 +60,16 @@ You can also re-run a published tag from the Actions tab via **workflow_dispatch
 ## Bumping the formula by hand
 
 If `TAP_TOKEN` isn't set, take the `sha256` from the release job summary and commit this to
-`DanielKag/homebrew-gitt` as `Formula/gitt.rb` — it's `packaging/homebrew/gitt.rb.tmpl` with
+`danielkag/homebrew-gitt` as `Formula/gitt.rb` — it's `packaging/homebrew/gitt.rb.tmpl` with
 `@VERSION@`, `@ARCHIVE@`, and `@SHA256@` filled in.
 
 Verify before announcing:
 
 ```bash
 brew uninstall gitt 2>/dev/null
-brew untap DanielKag/gitt 2>/dev/null
-brew tap DanielKag/gitt
-brew trust DanielKag/gitt
+brew untap danielkag/gitt 2>/dev/null
+brew tap danielkag/gitt
+brew trust danielkag/gitt
 brew install --verbose gitt
 brew test gitt         # asserts --version and the "not a git repository" exit path
 brew audit --formula danielkag/gitt/gitt   # must be clean before announcing
