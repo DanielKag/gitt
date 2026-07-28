@@ -22,6 +22,7 @@ gitt branch   # switch, create, delete branches; see each one's PR status
 
 ```bash
 brew tap DanielKag/gitt
+brew trust DanielKag/gitt   # Homebrew 6+ requires this for any third-party tap
 brew install gitt
 ```
 

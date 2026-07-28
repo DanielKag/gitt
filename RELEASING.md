@@ -51,6 +51,7 @@ Users get it with:
 
 ```bash
 brew tap DanielKag/gitt
+brew trust DanielKag/gitt          # Homebrew 6+ gate on third-party taps
 brew install gitt                  # or `brew upgrade gitt`
 ```
 
@@ -68,8 +69,10 @@ Verify before announcing:
 brew uninstall gitt 2>/dev/null
 brew untap DanielKag/gitt 2>/dev/null
 brew tap DanielKag/gitt
+brew trust DanielKag/gitt
 brew install --verbose gitt
-brew test gitt        # asserts --version and the "not a git repository" exit path
+brew test gitt         # asserts --version and the "not a git repository" exit path
+brew audit --formula danielkag/gitt/gitt   # must be clean before announcing
 gitt log
 ```
 
