@@ -2,6 +2,7 @@
 
 pub mod branch;
 pub mod commit;
+pub mod config;
 pub mod diff;
 pub mod diff_tool;
 pub mod main_branch;
@@ -13,6 +14,7 @@ pub mod url;
 
 pub use branch::{Branch, PrStatus};
 pub use commit::{Commit, CommitInvocation, Ref, View, commit_command};
+pub use config::{Config, parse_config};
 pub use diff::{DiffFile, DiffScope};
 pub use diff_tool::DiffTool;
 pub use status::{DiffKind, StatusEntry};

@@ -262,7 +262,7 @@ pub fn render_to_string(state: &BranchState, width: u16, height: u16) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{BranchAction, BranchMenu, ConfirmDeleteBranch, SummaryState};
+    use crate::state::{BranchAction, BranchMenu, ConfirmDeleteBranch, Event, SummaryState};
 
     fn branch(name: &str, current: bool, rel: &str, subject: &str) -> Branch {
         Branch {
@@ -386,7 +386,7 @@ mod tests {
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 
-    // BR-11/12: a ready branch summary is shown in the footer.
+    // BR-11/12 + SUM-13: a cached summary for the selected branch reveals the footer and shows it.
     #[test]
     fn br_11_summary_ready_snapshot() {
         let mut s = app();
@@ -395,16 +395,54 @@ mod tests {
             key,
             SummaryState::Ready("Adds an in-process fuzzy finder over the branch list.".into()),
         );
+        s.reveal_summary_panel_if_ready();
+        assert!(s.summary_panel_open, "a cached summary reveals the footer");
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 
-    // BR-11: with no summary, the footer shows the "press s" hint (shared with gitt log).
+    // SUM-13: a fresh branch screen draws no footer — the list owns those rows.
+    #[test]
+    fn sum_13_branch_panel_hidden_on_a_fresh_screen() {
+        let out = render_to_string(&app(), 80, 12);
+        assert!(!out.contains("ai summary"), "no footer yet:\n{out}");
+        assert!(!out.contains("press @"), "and no hint yet:\n{out}");
+    }
+
+    // BR-11 + SUM-14: once open, the footer shows the hint for a branch with no summary of its own.
     #[test]
     fn br_11_summary_hint_snapshot() {
-        let s = app();
+        let mut s = app();
+        s.summary_panel_open = true;
         let out = render_to_string(&s, 80, 12);
         assert!(out.contains("ai summary"));
         assert!(out.contains("press @ for an AI summary"));
+    }
+
+    // SUM-13/14: `@` reveals the footer at once, and it survives moving onto an unsummarized branch.
+    #[test]
+    fn sum_14_branch_panel_is_sticky_once_open() {
+        use crate::state::update_branch;
+        use crossterm::event::{KeyCode, KeyEvent};
+
+        let mut s = app();
+        update_branch(&mut s, Event::Key(KeyEvent::from(KeyCode::Char('@'))));
+        assert!(s.summary_panel_open, "@ reveals the footer at once");
+
+        update_branch(&mut s, Event::Key(KeyEvent::from(KeyCode::Char('j'))));
+        assert!(s.summary_panel_open, "and it stays open");
+        assert!(render_to_string(&s, 80, 12).contains("ai summary"));
+    }
+
+    // SUM-15: while hidden, the footer's rows belong to the branch list.
+    #[test]
+    fn sum_15_branch_hidden_panel_gives_its_rows_to_the_list() {
+        let mut s = app();
+        let hidden = s.viewport_rows();
+        s.summary_panel_open = true;
+        assert_eq!(
+            hidden - s.viewport_rows(),
+            crate::state::SUMMARY_ROWS as usize
+        );
     }
 
     #[test]

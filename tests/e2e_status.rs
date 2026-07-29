@@ -49,16 +49,21 @@ fn stat_04_space_stages_and_unstages() {
     let repo = TempRepo::with_dirty();
     let mut tui = spawn(repo.path());
     tui.wait_for("tracked.txt");
+    // One file (newstaged.txt) starts staged. Sync on the *header count* rather than on the transient
+    // "Staged"/"Unstaged" status message: the message appears as soon as git returns, but the list is
+    // only correct once the follow-up reload lands. Pressing Space in that window would act on the
+    // stale row and re-stage instead of unstaging.
+    tui.wait_for("1 staged");
 
     // Cursor 0 = newstaged.txt; move to tracked.txt (cursor 1).
     tui.send_str("j");
     tui.send_str(" ");
-    tui.wait_for("Staged");
+    tui.wait_for("2 staged");
     assert!(repo.is_staged("tracked.txt"), "Space should stage the file");
 
     // Now fully staged → Space unstages it.
     tui.send_str(" ");
-    tui.wait_for("Unstaged");
+    tui.wait_for("1 staged");
     assert!(
         !repo.is_staged("tracked.txt"),
         "Space again should unstage the file"

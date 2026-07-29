@@ -7,10 +7,10 @@ Search:   (3 matches)
   aaaaaaa 3 days ago    Ada Lovelace     add fuzzy search (HEAD, feature)
   bbbbbbb 5 days ago    Bo               fix flaky test
   ccccccc 2 weeks ago   Cy               refactor parser
+
+
 ┌diff──────────────────────────────────────────────────────────────────────────┐
-└──────────────────────────────────────────────────────────────────────────────┘
-┌ai summary────────────────────────────────────────────────────────────────────┐
-│press @ for an AI summary                                                     │
-│                                                                              │
+│commit aaaaaaa                                                                │
+│+added line                                                                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 j/k · /search · Tab preview · @ summary · s expand · ←/→ view · Enter · R fetch

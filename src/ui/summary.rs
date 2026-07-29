@@ -19,6 +19,11 @@ pub fn render_footer(
     summary: Option<&SummaryState>,
     expanded: bool,
 ) {
+    // The panel is hidden (SUM-13) — the layout gave it no rows, so there is nothing to draw and the
+    // list already owns this space. Guarding here covers every screen that renders the shared footer.
+    if area.height == 0 {
+        return;
+    }
     let width = area.width.saturating_sub(2) as usize; // inside the border
     let rows = area.height.saturating_sub(2) as usize; // visible content lines
 

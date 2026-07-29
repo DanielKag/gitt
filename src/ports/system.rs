@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::{Browser, Clipboard, Clock, Env, GitError, PrOpener, Summarizer, SummaryCache};
 use crate::domain::DiffTool;
 use crate::domain::PrStatus;
+use crate::domain::config::{Config, diff_tool_choice, ollama_model_choice, parse_config};
 use crate::domain::summary::{ollama_generate_url, ollama_model, resolve_cache_dir};
 use crate::parse::parse_pr_list;
 
@@ -41,15 +42,35 @@ impl Env for RealEnv {
     }
 }
 
-/// Resolve which diff renderer to use for previews. Precedence: an explicit choice (`--diff-tool`
-/// flag or the `GITT_DIFF_TOOL` env var) wins; otherwise auto-detect the first tool installed on
-/// `PATH` (native single-binary tools first). A chosen-but-missing tool, or nothing installed,
-/// resolves to [`DiffTool::None`] (plain text) — never an error. `GITT_DIFF_TOOL=none` forces plain
-/// (used by e2e for determinism, since CI has none of the tools installed).
-pub fn resolve_diff_tool(explicit: Option<&str>) -> DiffTool {
-    let choice = explicit
-        .map(str::to_string)
-        .or_else(|| std::env::var("GITT_DIFF_TOOL").ok());
+/// Read the user's `~/.gitt` (or `$GITT_CONFIG`) and parse it. A missing or unreadable file — by far
+/// the common case — is an empty [`Config`], never an error, so a bad config can't stop `gitt` from
+/// opening (CFG-08). Parsing itself is pure; this is only the file read.
+pub fn load_config() -> Config {
+    let path = config_path();
+    let text = path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    parse_config(&text)
+}
+
+/// Where the config file lives: `$GITT_CONFIG` if set (also the e2e seam), else `$HOME/.gitt`.
+fn config_path() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("GITT_CONFIG").filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(p));
+    }
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(|home| PathBuf::from(home).join(".gitt"))
+}
+
+/// Resolve which diff renderer to use for previews. Precedence: `--diff-tool` flag → `GITT_DIFF_TOOL`
+/// env var → `~/.gitt` `diff_tool` → auto-detect the first tool installed on `PATH` (native
+/// single-binary tools first). A chosen-but-missing tool, or nothing installed, resolves to
+/// [`DiffTool::None`] (plain text) — never an error. `GITT_DIFF_TOOL=none` forces plain (used by e2e
+/// for determinism, since CI has none of the tools installed). See CFG-06.
+pub fn resolve_diff_tool(explicit: Option<&str>, config: &Config) -> DiffTool {
+    let choice = diff_tool_choice(explicit, std::env::var("GITT_DIFF_TOOL").ok(), config);
     match choice {
         Some(name) => {
             let tool = DiffTool::parse(&name);
@@ -196,10 +217,28 @@ impl PrOpener for RealPr {
 /// Honors two test seams: `GITT_FAKE_SUMMARY` returns a canned summary without touching ollama, and
 /// (when `GITT_TEST_SINK_DIR` is set) the prompt it *would* have sent is recorded so e2e can assert
 /// the context was built correctly. `GITT_FAKE_SUMMARY_ERROR` forces a deterministic failure.
-pub struct RealSummarizer;
+pub struct RealSummarizer {
+    /// The Ollama model to generate with, already resolved (env → `~/.gitt` → default) at startup by
+    /// [`RealSummarizer::new`], so the hot path doesn't re-read the environment per summary.
+    model: String,
+}
+
+impl RealSummarizer {
+    /// Resolve the model once: `GITT_OLLAMA_MODEL` → `~/.gitt` `ollama_model` → built-in default
+    /// (CFG-07).
+    pub fn new(config: &Config) -> Self {
+        let configured = ollama_model_choice(std::env::var("GITT_OLLAMA_MODEL").ok(), config);
+        RealSummarizer {
+            model: ollama_model(configured),
+        }
+    }
+}
 
 impl Summarizer for RealSummarizer {
     fn summarize(&self, prompt: &str, on_token: &mut dyn FnMut(&str)) -> Result<(), GitError> {
+        // Test seam: record which model this run resolved to, so e2e can assert that a `~/.gitt`
+        // `ollama_model` really reached the summarizer (CFG-09) even on the faked paths below.
+        let _ = write_sink("ollama_model.txt", &self.model);
         if let Ok(err) = std::env::var("GITT_FAKE_SUMMARY_ERROR") {
             let _ = write_sink("summary_prompt.txt", prompt);
             return Err(GitError::Io(err));
@@ -209,9 +248,8 @@ impl Summarizer for RealSummarizer {
             on_token(&fake);
             return Ok(());
         }
-        let model = ollama_model(std::env::var("GITT_OLLAMA_MODEL").ok());
         let url = ollama_generate_url(std::env::var("OLLAMA_HOST").ok().as_deref());
-        ollama_stream(&url, &model, prompt, on_token)
+        ollama_stream(&url, &self.model, prompt, on_token)
     }
 }
 

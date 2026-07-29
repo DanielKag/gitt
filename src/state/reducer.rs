@@ -10,7 +10,18 @@ use crate::domain::{Commit, View, url};
 use crate::fuzzy::MatchEntry;
 
 /// Fold an event into the state, returning the side effects the shell must perform.
+///
+/// Every event funnels through here, so this is also where the AI-summary panel decides to reveal
+/// itself: whatever the event was, if the selected commit now has a summary worth showing, the panel
+/// appears (and then stays — SUM-13/14). Keeping that in one place means no individual handler has to
+/// remember to do it.
 pub fn update(state: &mut AppState, event: Event) -> Vec<Effect> {
+    let effects = update_inner(state, event);
+    state.reveal_summary_panel_if_ready();
+    effects
+}
+
+fn update_inner(state: &mut AppState, event: Event) -> Vec<Effect> {
     match event {
         Event::Key(key) => on_key(state, key),
         Event::Resize(w, h) => {
@@ -547,6 +558,10 @@ fn summarize_selected(state: &mut AppState) -> Vec<Effect> {
     state
         .summaries
         .insert(hash.clone(), SummaryState::Generating(String::new()));
+    // Pressing `@` is an explicit request for the panel, so reveal it now rather than waiting for the
+    // first token (SUM-13).
+    state.summary_panel_open = true;
+    state.clamp_scroll();
     vec![Effect::GenerateSummary { hash, subject }]
 }
 
@@ -980,7 +995,20 @@ mod tests {
     #[test]
     fn log_06_ctrl_d_u_half_page() {
         let mut s = app();
-        s.size = (80, 11); // viewport_rows = 11 - CHROME(3) - SUMMARY(4) = 4, half = 2
+        // The summary panel is hidden here (nothing to show), so the list owns its rows too:
+        // viewport_rows = 11 - CHROME(3) = 8, half = 4.
+        s.size = (80, 11);
+        s.recompute_matches();
+        drive(&mut s, vec![ctrl('d')]);
+        assert_eq!(s.cursor, 3, "clamped to the last of 4 commits");
+        drive(&mut s, vec![ctrl('u')]);
+        assert_eq!(s.cursor, 0);
+
+        // With the panel showing, the same key moves half of a *smaller* viewport (SUM-15):
+        // viewport_rows = 11 - CHROME(3) - SUMMARY(4) = 4, half = 2.
+        let mut s = app();
+        s.size = (80, 11);
+        s.summary_panel_open = true;
         s.recompute_matches();
         drive(&mut s, vec![ctrl('d')]);
         assert_eq!(s.cursor, 2);

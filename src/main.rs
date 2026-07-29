@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use gitt::domain::DiffTool;
 use gitt::ports::git_cli::{self, RealGit};
 use gitt::ports::system::{
-    RealBrowser, RealClipboard, RealClock, RealPr, RealSummarizer, RealSummaryCache,
+    RealBrowser, RealClipboard, RealClock, RealPr, RealSummarizer, RealSummaryCache, load_config,
     resolve_diff_tool,
 };
 use gitt::ports::{Clock, Ports};
@@ -49,16 +49,20 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let diff_tool = resolve_diff_tool(cli.diff_tool.as_deref());
+    // `~/.gitt` is read once, here at the edge, and only feeds the two resolvers below — everything
+    // downstream receives already-resolved values (see specs/config.md).
+    let config = load_config();
+    let diff_tool = resolve_diff_tool(cli.diff_tool.as_deref(), &config);
+    let summarizer = Arc::new(RealSummarizer::new(&config));
     match cli.command {
-        Command::Log { max_count } => run_log(max_count, diff_tool),
-        Command::Status => run_status(diff_tool),
-        Command::Diff => run_diff(diff_tool),
-        Command::Branch => run_branch(diff_tool),
+        Command::Log { max_count } => run_log(max_count, diff_tool, summarizer),
+        Command::Status => run_status(diff_tool, summarizer),
+        Command::Diff => run_diff(diff_tool, summarizer),
+        Command::Branch => run_branch(diff_tool, summarizer),
     }
 }
 
-fn run_log(max_count: usize, diff_tool: DiffTool) -> Result<()> {
+fn run_log(max_count: usize, diff_tool: DiffTool, summarizer: Arc<RealSummarizer>) -> Result<()> {
     let dir = std::env::current_dir().context("cannot determine current directory")?;
 
     if !git_cli::is_git_repo(&dir) {
@@ -87,14 +91,14 @@ fn run_log(max_count: usize, diff_tool: DiffTool) -> Result<()> {
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),
-        summarizer: Arc::new(RealSummarizer),
+        summarizer,
         summary_cache: Arc::new(RealSummaryCache),
     };
 
     runtime::run(state, ports)
 }
 
-fn run_status(diff_tool: DiffTool) -> Result<()> {
+fn run_status(diff_tool: DiffTool, summarizer: Arc<RealSummarizer>) -> Result<()> {
     let dir = std::env::current_dir().context("cannot determine current directory")?;
 
     if !git_cli::is_git_repo(&dir) {
@@ -111,14 +115,14 @@ fn run_status(diff_tool: DiffTool) -> Result<()> {
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),
-        summarizer: Arc::new(RealSummarizer),
+        summarizer,
         summary_cache: Arc::new(RealSummaryCache),
     };
 
     runtime::run(state, ports)
 }
 
-fn run_diff(diff_tool: DiffTool) -> Result<()> {
+fn run_diff(diff_tool: DiffTool, summarizer: Arc<RealSummarizer>) -> Result<()> {
     let dir = std::env::current_dir().context("cannot determine current directory")?;
 
     if !git_cli::is_git_repo(&dir) {
@@ -135,14 +139,14 @@ fn run_diff(diff_tool: DiffTool) -> Result<()> {
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),
-        summarizer: Arc::new(RealSummarizer),
+        summarizer,
         summary_cache: Arc::new(RealSummaryCache),
     };
 
     runtime::run(state, ports)
 }
 
-fn run_branch(diff_tool: DiffTool) -> Result<()> {
+fn run_branch(diff_tool: DiffTool, summarizer: Arc<RealSummarizer>) -> Result<()> {
     let dir = std::env::current_dir().context("cannot determine current directory")?;
 
     if !git_cli::is_git_repo(&dir) {
@@ -161,7 +165,7 @@ fn run_branch(diff_tool: DiffTool) -> Result<()> {
         clipboard: Arc::new(RealClipboard),
         browser: Arc::new(RealBrowser),
         pr: Arc::new(RealPr),
-        summarizer: Arc::new(RealSummarizer),
+        summarizer,
         summary_cache: Arc::new(RealSummaryCache),
     };
 

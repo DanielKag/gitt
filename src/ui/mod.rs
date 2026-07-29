@@ -459,11 +459,103 @@ mod tests {
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 
-    // SUM-01: with no summary, the panel shows the "press s" hint.
+    // SUM-13: a fresh screen draws no panel at all — the list owns those rows.
+    #[test]
+    fn sum_13_panel_hidden_on_a_fresh_screen() {
+        let out = render_to_string(&app(), 80, 12);
+        assert!(
+            !out.contains("ai summary"),
+            "no panel until there's something to show:\n{out}"
+        );
+        assert!(
+            !out.contains("press @"),
+            "and no hint either — the hint is only for an already-open panel:\n{out}"
+        );
+    }
+
+    // SUM-01/13: with the panel open but nothing cached for the selection, it shows the hint.
     #[test]
     fn sum_01_summary_hint_snapshot() {
-        let s = app();
+        let mut s = app();
+        s.summary_panel_open = true;
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
+    }
+
+    // SUM-13: the panel reveals itself when the *selected* commit turns out to have a cached summary.
+    #[test]
+    fn sum_13_cache_hit_on_selection_reveals_the_panel() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        assert!(!s.summary_panel_open, "starts hidden");
+
+        crate::state::update(
+            &mut s,
+            crate::state::Event::SummaryLoaded {
+                hash,
+                text: "Adds a fuzzy finder.".into(),
+            },
+        );
+        assert!(s.summary_panel_open, "a cache hit reveals the panel");
+        let out = render_to_string(&s, 80, 12);
+        assert!(out.contains("ai summary") && out.contains("Adds a fuzzy finder."));
+    }
+
+    // SUM-13: a cache *miss* on the selection must NOT reveal the panel — that's the case where it
+    // would take rows from the list only to say "press @".
+    #[test]
+    fn sum_13_cache_miss_keeps_the_panel_hidden() {
+        let mut s = app();
+        let hash = s.selected_hash().unwrap();
+        crate::state::update(&mut s, crate::state::Event::SummaryMissing { hash });
+        assert!(!s.summary_panel_open, "a miss keeps the panel hidden");
+        assert!(!render_to_string(&s, 80, 12).contains("ai summary"));
+    }
+
+    // SUM-13/14: `@` reveals the panel immediately (before any token arrives), and it then survives
+    // moving the cursor onto commits with no summary at all.
+    #[test]
+    fn sum_14_panel_is_sticky_once_open() {
+        use crossterm::event::{KeyCode, KeyEvent};
+
+        let mut s = app();
+        crate::state::update(
+            &mut s,
+            crate::state::Event::Key(KeyEvent::from(KeyCode::Char('@'))),
+        );
+        assert!(s.summary_panel_open, "@ reveals the panel at once");
+        assert!(render_to_string(&s, 80, 12).contains("summarizing with ollama"));
+
+        // Move to a commit with no summary: the panel stays, showing the hint.
+        for _ in 0..2 {
+            crate::state::update(
+                &mut s,
+                crate::state::Event::Key(KeyEvent::from(KeyCode::Char('j'))),
+            );
+        }
+        assert!(s.summary_panel_open, "the panel does not flicker shut");
+        let out = render_to_string(&s, 80, 12);
+        assert!(
+            out.contains("ai summary") && out.contains("press @"),
+            "{out}"
+        );
+    }
+
+    // SUM-15: the list gets the panel's rows back while it's hidden.
+    #[test]
+    fn sum_15_hidden_panel_gives_its_rows_to_the_list() {
+        let mut s = app();
+        let hidden = s.viewport_rows();
+        s.summary_panel_open = true;
+        let shown = s.viewport_rows();
+        assert!(
+            hidden > shown,
+            "hidden panel: {hidden} list rows; shown: {shown}"
+        );
+        assert_eq!(
+            hidden - shown,
+            crate::state::SUMMARY_ROWS as usize,
+            "exactly the panel's rows move between the two"
+        );
     }
 
     // SUM-06: a ready summary is shown (wrapped) in the panel.
@@ -477,6 +569,7 @@ mod tests {
                 "Adds an in-process fuzzy finder so the commit list filters as you type.".into(),
             ),
         );
+        s.reveal_summary_panel_if_ready();
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 
@@ -487,6 +580,7 @@ mod tests {
         let hash = s.selected_hash().unwrap();
         s.summaries
             .insert(hash, SummaryState::Generating(String::new()));
+        s.reveal_summary_panel_if_ready();
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 
@@ -501,6 +595,7 @@ mod tests {
                 "Bumps `sled-playwright` from `1.295.0` to `1.307.0` in `package.json`.".into(),
             ),
         );
+        s.reveal_summary_panel_if_ready();
         let out = render_to_string(&s, 80, 12);
         assert!(
             !out.contains('`'),
@@ -524,6 +619,7 @@ mod tests {
                     .into(),
             ),
         );
+        s.reveal_summary_panel_if_ready();
         let out = render_to_string(&s, 80, 12);
         assert!(out.contains('…'), "overflowing teaser shows an ellipsis");
         assert!(out.contains("s: expand"), "title hints how to expand");
@@ -548,6 +644,7 @@ mod tests {
                     .into(),
             ),
         );
+        s.reveal_summary_panel_if_ready();
         // Height forces the collapsed footer into overflow (the teaser path).
         let out = render_to_string(&s, 80, 12);
         assert!(
@@ -587,6 +684,7 @@ mod tests {
                     .into(),
             ),
         );
+        s.reveal_summary_panel_if_ready();
         s.summary_expanded = true;
         let out = render_to_string(&s, 80, 20);
         assert!(
@@ -612,6 +710,7 @@ mod tests {
             hash,
             SummaryState::Generating("Adds an in-process fuzzy".to_string()),
         );
+        s.reveal_summary_panel_if_ready();
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 
@@ -621,6 +720,7 @@ mod tests {
         let hash = s.selected_hash().unwrap();
         s.summaries
             .insert(hash, SummaryState::Failed("ollama not found".into()));
+        s.reveal_summary_panel_if_ready();
         insta::assert_snapshot!(render_to_string(&s, 80, 12));
     }
 

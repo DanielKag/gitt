@@ -158,6 +158,11 @@ pub struct AppState {
     /// When true, the summary footer grows to show the selected commit's full summary (toggled by
     /// `S`); the list stays navigable above it.
     pub summary_expanded: bool,
+    /// Whether the AI-summary panel is showing at all. Starts `false` — a fresh `gitt log` is all list
+    /// — and is latched `true` (never back to `false`) the first time there is something to show:
+    /// `@` pressed, or the selection landing on an entry whose summary is already cached. Sticky, so
+    /// the panel can't flicker open and shut as the cursor moves (SUM-13/14).
+    pub summary_panel_open: bool,
     /// Transient status-line message (shown on the search bar, not the keymap legend).
     pub status: Option<String>,
     pub status_is_error: bool,
@@ -189,6 +194,7 @@ impl AppState {
             menu: None,
             summaries: HashMap::new(),
             summary_expanded: false,
+            summary_panel_open: false,
             status: None,
             status_is_error: false,
             current_branch,
@@ -211,9 +217,26 @@ impl AppState {
         self.status_is_error = true;
     }
 
-    /// Height (rows) of the summary footer, including its border. See [`summary_panel_rows`].
+    /// Height (rows) of the summary footer, including its border — `0` while the panel is hidden, so
+    /// the list gets those rows. See [`summary_panel_rows`].
     pub fn summary_panel_rows(&self) -> u16 {
+        if !self.summary_panel_open {
+            return 0;
+        }
         summary_panel_rows(self.selected_summary(), self.summary_expanded, self.size)
+    }
+
+    /// Reveal the summary panel if the selected entry now has something worth showing (a cached,
+    /// streaming, or failed summary — but *not* a plain cache miss). Called from one choke point at
+    /// the end of the reducer, so every route in — selection moved, a cache read landed, a bulk
+    /// prefetch landed, tokens streamed, generation failed — behaves identically (SUM-13). Once open
+    /// it stays open (SUM-14), and the list re-clamps because the viewport just shrank (SUM-15).
+    pub fn reveal_summary_panel_if_ready(&mut self) {
+        if self.summary_panel_open || !summary_is_showable(self.selected_summary()) {
+            return;
+        }
+        self.summary_panel_open = true;
+        self.clamp_scroll();
     }
 
     /// Number of commit rows visible in the list given the current terminal height, accounting for
@@ -353,6 +376,17 @@ pub fn summary_panel_rows(summary: Option<&SummaryState>, expanded: bool, size: 
         .max(1) as u16;
     let cap = size.1.saturating_sub(CHROME_ROWS + 3).max(SUMMARY_ROWS);
     (content + 2).clamp(SUMMARY_ROWS, cap)
+}
+
+/// Whether a summary state is worth revealing the panel for: a cached/generated summary, one being
+/// generated right now, or a failure the user needs to see. A `Missing` (looked up, not cached) or
+/// an absent entry is *not* — that's the case where the panel would say nothing but "press @", and
+/// SUM-13 says we don't take rows from the list for that. Shared by `gitt log` and `gitt branch`.
+pub fn summary_is_showable(summary: Option<&SummaryState>) -> bool {
+    matches!(
+        summary,
+        Some(SummaryState::Ready(_) | SummaryState::Generating(_) | SummaryState::Failed(_))
+    )
 }
 
 /// The plain (backticks stripped) text shown for a summary — used to size the expanded footer. Empty

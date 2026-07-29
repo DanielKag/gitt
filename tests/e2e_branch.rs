@@ -320,6 +320,38 @@ fn br_17_pr_status_column() {
     tui.wait_exit();
 }
 
+// SUM-13/14 on the branch screen: no footer until `@`, then it sticks as the cursor moves.
+#[test]
+fn sum_13_14_branch_panel_is_hidden_then_sticky() {
+    let repo = TempRepo::with_branches();
+    let mut tui = Tui::spawn_cmd_env(
+        repo.path(),
+        "branch",
+        &[("GITT_FAKE_SUMMARY", "Reworks the parser.")],
+    );
+    tui.wait_for("wip-parser");
+    tui.wait_until_gone("ai summary");
+
+    // Pin the selection to wip-parser — `main` is pinned first and would short-circuit to the
+    // "no changes relative to main" summary (BR-14) instead of exercising the panel.
+    tui.send_str("/");
+    tui.send_str("wip");
+    tui.wait_for("wip-parser");
+    tui.enter(); // leave search
+    // Still hidden: a cache miss on the selected branch must not reveal the footer (SUM-13).
+    tui.wait_until_gone("ai summary");
+
+    tui.send_str("@");
+    tui.wait_for("Reworks the parser.");
+
+    // Moving to another branch keeps the footer open (showing the hint for that branch).
+    tui.send_str("j");
+    tui.wait_for("ai summary");
+
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
 // BR-20: `o` ("only open") narrows the list to branches with an open/draft PR (plus main and the
 // current branch); pressing it again restores the full list.
 #[test]

@@ -92,29 +92,47 @@ A key means the same thing on every screen.
 
 ---
 
-## Colorized diffs
+## Configuration
 
-`gitt` renders diffs through whichever third-party differ you already like, and falls back to plain
-`git` output when none is installed:
+Everything works out of the box. When you want to pin something, drop a `~/.gitt`:
+
+```ini
+# ~/.gitt
+diff_tool    = delta            # difftastic · delta · git-split-diffs · none
+ollama_model = qwen3-coder:30b  # model for the AI summaries below
+```
+
+`key = value`, `#` for comments, no sections. A missing or malformed file is never an error — `gitt`
+falls back to its defaults rather than refusing to start. Anything here can be overridden for one run:
 
 ```bash
-gitt diff --diff-tool difftastic     # or delta, git-split-diffs, none
-export GITT_DIFF_TOOL=delta          # or set it once
+gitt diff --diff-tool difftastic   # a flag beats the file
+export GITT_DIFF_TOOL=delta        # so does an env var
 ```
+
+Precedence is **flag → environment variable → `~/.gitt` → default**.
+
+### Colorized diffs
+
+`gitt` renders diffs through whichever third-party differ you already have — difftastic, delta, or
+git-split-diffs — auto-detecting one on your `PATH` and falling back to plain `git` output when there
+isn't one. Set `diff_tool` to pick deliberately, or `none` to always stay plain.
 
 ---
 
 ## Local AI summaries (optional)
 
 `gitt` can tell you what a commit or a branch actually *did*, in a sentence, when the message doesn't.
-Press `@` on any row and a summary streams into the panel below the list; `s` expands it.
+Press `@` on any row and a summary streams into a panel below the list; `s` expands it. The panel isn't
+there until it has something to say — it appears when you ask for a summary or land on a row that
+already has one, and then stays for the rest of the session.
 
 This is off unless you opt in, and it stays on your machine — the model runs locally via
 [Ollama](https://ollama.com), so no diff is ever sent anywhere. Set it up once:
 
 ```bash
 brew install ollama && ollama serve
-ollama pull qwen3-coder:30b
+ollama pull qwen3-coder:30b        # or set `ollama_model` to something smaller
 ```
 
 Every summary is cached on disk by SHA, so one you've already read appears instantly and costs nothing
@@ -122,9 +140,10 @@ the second time. Without Ollama running, the panel just says so — nothing else
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GITT_OLLAMA_MODEL` | `qwen3-coder:30b` | Which model writes the summaries |
+| `GITT_OLLAMA_MODEL` | `qwen3-coder:30b` | Overrides `ollama_model` for one run |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Where Ollama is listening |
 | `GITT_CACHE_DIR` | `$XDG_CACHE_HOME/gitt/summaries` | Where summaries are cached |
+| `GITT_CONFIG` | `~/.gitt` | Read the config from somewhere else |
 
 ---
 

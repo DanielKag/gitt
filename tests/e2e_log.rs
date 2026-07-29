@@ -178,21 +178,50 @@ fn log_13_checkout_moves_head() {
     assert_eq!(repo.head(), repo.sha("fix flaky test"));
 }
 
-// SUM-01/03: the AI-summary panel is visible and shows the "press s" hint for the selected commit
-// when nothing is cached yet.
+// SUM-01/03/13: with nothing cached, no panel is drawn at all; `@` is what reveals it.
 #[test]
 fn sum_01_03_summary_panel_shows_hint() {
     let repo = TempRepo::with_graph();
     let mut tui = Tui::spawn(repo.path());
     tui.wait_for("local only change");
+
+    // SUM-13: nothing is cached in this fresh repo, so the panel is not drawn at all.
+    tui.wait_until_gone("ai summary");
+
+    // Pressing `@` reveals it; with no summarizer configured the panel is where the outcome shows.
+    tui.send_str("@");
     tui.wait_for("ai summary");
-    tui.wait_for("press @ for an AI summary");
 
     tui.send_str("q");
     tui.wait_exit();
 }
 
-// SUM-04/05/06: pressing `s` generates a summary (via the fake summarizer), the panel shows it (with
+// SUM-13/14: the panel stays hidden on a fresh screen, appears on `@`, and then survives moving the
+// cursor onto a commit with no summary of its own (where it shows the hint).
+#[test]
+fn sum_13_14_panel_is_hidden_then_sticky() {
+    let repo = TempRepo::with_graph();
+    let mut tui = Tui::spawn_cmd_env(
+        repo.path(),
+        "log",
+        &[("GITT_FAKE_SUMMARY", "Adds a local-only change.")],
+    );
+    tui.wait_for("local only change");
+    tui.wait_until_gone("ai summary");
+
+    tui.send_str("@");
+    tui.wait_for("Adds a local-only change.");
+
+    // Move down to an unsummarized commit: the panel remains, now showing the hint.
+    tui.send_str("j");
+    tui.wait_for("press @ for an AI summary");
+    tui.wait_for("ai summary");
+
+    tui.send_str("q");
+    tui.wait_exit();
+}
+
+// SUM-04/05/06: pressing `@` generates a summary (via the fake summarizer), the panel shows it (with
 // the redundant "This commit" preamble stripped), and the prompt carried the subject and diff.
 #[test]
 fn sum_04_06_generate_shows_summary_and_builds_prompt() {
@@ -203,7 +232,6 @@ fn sum_04_06_generate_shows_summary_and_builds_prompt() {
         &[("GITT_FAKE_SUMMARY", "This commit adds a local-only change.")],
     );
     tui.wait_for("local only change");
-    tui.wait_for("press @ for an AI summary");
 
     tui.send_str("@");
     // The panel shows the summary with the "This commit " preamble stripped and re-capitalized.

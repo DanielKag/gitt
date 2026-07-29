@@ -24,7 +24,9 @@ pub use diff::{DiffAction, DiffLoad, DiffMenu, DiffMode, DiffPreview, DiffState}
 pub use diff_reducer::update_diff;
 pub use effect::Effect;
 pub use event::Event;
-pub use model::{ActionMenu, AppState, Load, MenuAction, Mode, PreviewState, SummaryState};
+pub use model::{
+    ActionMenu, AppState, Load, MenuAction, Mode, PreviewState, SUMMARY_ROWS, SummaryState,
+};
 pub use reducer::update;
 pub use status::{
     CommitEditor, ConfirmDiscard, FileAction, FileMenu, FilePreview, PendingCommit, StatusLoad,

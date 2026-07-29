@@ -16,7 +16,16 @@ use crate::domain::branch::summary_key;
 use crate::domain::summary::strip_preamble;
 
 /// Fold an event into the branch-screen state, returning the side effects the shell must perform.
+///
+/// As in `gitt log`, this single funnel is also where the AI-summary panel reveals itself once the
+/// selected branch has a summary worth showing (SUM-13/14).
 pub fn update_branch(state: &mut BranchState, event: Event) -> Vec<Effect> {
+    let effects = update_branch_inner(state, event);
+    state.reveal_summary_panel_if_ready();
+    effects
+}
+
+fn update_branch_inner(state: &mut BranchState, event: Event) -> Vec<Effect> {
     match event {
         Event::Key(key) => on_key(state, key),
         Event::Resize(w, h) => {
@@ -364,6 +373,9 @@ fn summarize_selected(state: &mut BranchState) -> Vec<Effect> {
     state
         .summaries
         .insert(key.clone(), SummaryState::Generating(String::new()));
+    // `@` is an explicit request for the panel, so reveal it now rather than on the first token.
+    state.summary_panel_open = true;
+    state.clamp_scroll();
     vec![Effect::GenerateBranchSummary {
         key,
         branch,

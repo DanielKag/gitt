@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use crate::domain::{Branch, PrStatus, branch::summary_key};
 use crate::fuzzy::{self, MatchEntry};
 
-use super::model::{SummaryState, summary_panel_rows};
+use super::model::{SummaryState, summary_is_showable, summary_panel_rows};
 
 /// Rows of "chrome" around the branch list: search bar (1) + status (1). Unlike `gitt log` there is no
 /// header/title row (BR-01), so this is one less than the log's `CHROME_ROWS`.
@@ -124,6 +124,9 @@ pub struct BranchState {
     pub open_prs_pinned: HashSet<String>,
     /// When true, the summary footer grows to show the selected branch's full summary (toggled by `S`).
     pub summary_expanded: bool,
+    /// Whether the AI-summary panel is showing at all — hidden until there is something to show, then
+    /// sticky for the session. Same rule and same helper as `gitt log` (SUM-13/14).
+    pub summary_panel_open: bool,
     /// Transient status-line message.
     pub status: Option<String>,
     /// Whether the current `status` is an error (rendered in dominant red) vs. an informational note.
@@ -148,6 +151,7 @@ impl BranchState {
             confirm: None,
             create_input: String::new(),
             summaries: HashMap::new(),
+            summary_panel_open: false,
             pr_statuses: None,
             open_prs_only: false,
             open_prs_pinned: HashSet::new(),
@@ -173,9 +177,23 @@ impl BranchState {
         self.status_is_error = true;
     }
 
-    /// Height (rows) of the summary footer — identical to `gitt log`'s (shared layout math).
+    /// Height (rows) of the summary footer — identical to `gitt log`'s (shared layout math), and `0`
+    /// while the panel is hidden so the branch list gets those rows.
     pub fn summary_panel_rows(&self) -> u16 {
+        if !self.summary_panel_open {
+            return 0;
+        }
         summary_panel_rows(self.selected_summary(), self.summary_expanded, self.size)
+    }
+
+    /// Reveal the panel once the selected branch has a summary worth showing, then keep it open for
+    /// the session. Mirrors `AppState::reveal_summary_panel_if_ready` (SUM-13/14/15).
+    pub fn reveal_summary_panel_if_ready(&mut self) {
+        if self.summary_panel_open || !summary_is_showable(self.selected_summary()) {
+            return;
+        }
+        self.summary_panel_open = true;
+        self.clamp_scroll();
     }
 
     /// Number of branch rows visible given the current terminal height, accounting for the footer.
