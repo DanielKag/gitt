@@ -168,8 +168,8 @@ E2E tests spawn the compiled binary against a throwaway git repo in a pseudo-ter
 keystrokes, and assert on both the rendered grid and the real side effects. They never sleep and never
 touch your machine's git config.
 
-See [CLAUDE.md](./CLAUDE.md) for the full working agreement, and [RELEASING.md](./RELEASING.md) for how
-a release is cut.
+See [CLAUDE.md](./CLAUDE.md) for the full working agreement. Cutting a release is one command —
+`scripts/release.sh 0.2.0` — see [RELEASING.md](./RELEASING.md).
 
 ## License
 

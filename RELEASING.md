@@ -1,85 +1,66 @@
 # Releasing gitt
 
-`gitt` ships as **one macOS universal binary** (arm64 + x86_64) per release, installed through a
-Homebrew tap. Everything below the one-time setup is automated by
-[`.github/workflows/release.yml`](.github/workflows/release.yml).
-
-## One-time setup
-
-1. **Push the code** to `github.com/danielkag/gitt` (public). CI runs on macOS: `fmt`, `clippy`,
-   unit + e2e tests.
-
-2. **Create the tap repo** — Homebrew resolves `danielkag/gitt` to the repo `homebrew-gitt`, so the
-   name matters:
-
-   ```bash
-   gh repo create danielkag/homebrew-gitt --public \
-     --description "Homebrew tap for gitt" --add-readme
-   ```
-
-3. **Let releases bump the tap.** Create a fine-grained PAT with **Contents: read and write** scoped
-   to `danielkag/homebrew-gitt` only, then add it to the main repo:
-
-   ```bash
-   gh secret set TAP_TOKEN --repo danielkag/gitt
-   ```
-
-   Without this secret the release still publishes; only the formula bump is skipped (see
-   [manual bump](#bumping-the-formula-by-hand)).
-
-## Cutting a release
-
 ```bash
-# 1. bump `version` in Cargo.toml (and Cargo.lock: `cargo check` refreshes it)
-# 2. tag it — the workflow refuses a tag that disagrees with Cargo.toml
-git commit -am "Release v0.2.0"
-git tag v0.2.0
-git push --follow-tags
+scripts/release.sh 0.2.0
 ```
 
-The workflow then:
+That's the whole thing. It bumps the version, tags it, waits for CI to build and publish the macOS
+universal binary, and points the Homebrew tap at the result. Nothing to configure and no access token
+to create — it runs from your Mac with the `gh` login you already have.
 
-1. verifies the tag matches `Cargo.toml`,
-2. runs the full test suite on macOS,
-3. builds both darwin targets and `lipo`s them into `dist/gitt`,
-4. packages `gitt-<version>-macos-universal.tar.gz` (binary + README + LICENSE),
-5. creates the GitHub release with generated notes and the tarball attached,
-6. renders [`packaging/homebrew/gitt.rb.tmpl`](packaging/homebrew/gitt.rb.tmpl) with the version and
-   sha256 and commits it to the tap as `Formula/gitt.rb`.
-
-Users get it with:
+Then anyone (including you) picks it up with:
 
 ```bash
-brew tap danielkag/gitt
-brew trust danielkag/gitt          # Homebrew 6+ gate on third-party taps
-brew install gitt                  # or `brew upgrade gitt`
+brew update && brew upgrade gitt
 ```
 
-You can also re-run a published tag from the Actions tab via **workflow_dispatch**.
+## What it actually does
 
-## Bumping the formula by hand
+1. **Refuses to start** if you're not on `main`, the tree is dirty, or `main` and `origin/main` differ.
+2. Runs `cargo test --locked`.
+3. Bumps `version` in `Cargo.toml` (and `Cargo.lock`), commits `Release v0.2.0`.
+4. Tags `v0.2.0` and pushes both.
+5. Watches [`release.yml`](.github/workflows/release.yml), which builds both darwin targets, `lipo`s
+   them into one universal binary, and publishes the GitHub release with the tarball attached.
+6. Downloads that tarball, checksums it, renders
+   [`packaging/homebrew/gitt.rb.tmpl`](packaging/homebrew/gitt.rb.tmpl), and commits the result to
+   `danielkag/homebrew-gitt` as `Formula/gitt.rb`.
 
-If `TAP_TOKEN` isn't set, take the `sha256` from the release job summary and commit this to
-`danielkag/homebrew-gitt` as `Formula/gitt.rb` — it's `packaging/homebrew/gitt.rb.tmpl` with
-`@VERSION@`, `@ARCHIVE@`, and `@SHA256@` filled in.
+Every step checks whether it has already happened, so if the build fails or your network drops you can
+fix the problem and run the same command again — it picks up where it stopped.
 
-Verify before announcing:
+## Why the tap update isn't in CI
+
+Updating the tap means pushing to a *second* repository. A GitHub Actions run only has rights to the
+repo it lives in, so doing it from CI would mean creating a personal access token and storing it as a
+secret — real setup, and a credential to rotate — purely to lend the bot an identity you already have
+on your laptop. Doing that one push locally is simpler and needs nothing. CI keeps the job it's good
+at: building the binary in a clean, reproducible environment.
+
+## One-time setup (already done)
+
+For reference, if this ever needs recreating:
 
 ```bash
-brew uninstall gitt 2>/dev/null
-brew untap danielkag/gitt 2>/dev/null
-brew tap danielkag/gitt
-brew trust danielkag/gitt
-brew install --verbose gitt
-brew test gitt         # asserts --version and the "not a git repository" exit path
-brew audit --formula danielkag/gitt/gitt   # must be clean before announcing
-gitt log
+gh repo create danielkag/gitt --public
+gh repo create danielkag/homebrew-gitt --public   # the `homebrew-` prefix is what `brew tap` expects
 ```
 
-## Local rehearsal
+## Verifying a release by hand
 
-The build and packaging steps run fine on a Mac (note: use the `rustup` toolchain — a Homebrew-installed
-`rustc` has no cross-target std):
+```bash
+brew update && brew upgrade gitt
+gitt --version
+brew test gitt                              # --version, and the "not a git repository" exit path
+brew audit --formula danielkag/gitt/gitt    # should be silent
+```
+
+Installing from a third-party tap needs a one-time `brew trust danielkag/gitt` on Homebrew 6+.
+
+## Building the artifact locally
+
+Rarely needed — CI does this — but if you want to check the binary before tagging (use the `rustup`
+toolchain; a Homebrew-installed `rustc` has no cross-target std):
 
 ```bash
 rustup target add aarch64-apple-darwin x86_64-apple-darwin

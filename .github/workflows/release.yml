@@ -1,11 +1,18 @@
 name: Release
 
 # Tag a release to publish it:
-#   # bump `version` in Cargo.toml, then
+#   scripts/release.sh 0.2.0        <- does everything; you want this
+#
+# Or by hand: bump `version` in Cargo.toml, then
 #   git commit -am "Release v0.2.0" && git tag v0.2.0 && git push --follow-tags
 #
 # This builds ONE macOS artifact — a universal binary covering both Apple Silicon and Intel — so the
 # Homebrew formula needs a single url/sha256 with no per-arch branching.
+#
+# This job's job is to BUILD and PUBLISH, nothing else. Updating the Homebrew tap is deliberately not
+# here: it means pushing to a second repo, which a workflow can only do with a personal access token
+# lent to it. `scripts/release.sh` does the whole release from your Mac, where the credentials already
+# are, and needs no token at all.
 on:
   push:
     tags: ["v*"]
@@ -24,10 +31,6 @@ env:
 jobs:
   release:
     runs-on: macos-latest
-    env:
-      # Lifted to the job so the tap step can test it in an `if:` (the `secrets` context is not
-      # available there). Empty when the secret is unset — the tap bump then simply doesn't run.
-      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,31 +99,4 @@ jobs:
             gh release upload "$TAG" "$ASSET" --clobber
           else
             gh release create "$TAG" "$ASSET" --title "$TAG" --generate-notes
-          fi
-
-      # Bump Formula/gitt.rb in the danielkag/homebrew-gitt tap so `brew upgrade gitt` picks this up.
-      # Needs a TAP_TOKEN secret: a fine-grained PAT with Contents:write scoped to the tap repo only.
-      # Without it this step is skipped — bump the formula by hand from the sha256 in the job summary.
-      - name: Bump the Homebrew tap
-        if: env.TAP_TOKEN != ''
-        env:
-          VERSION: ${{ steps.v.outputs.version }}
-          SHA256: ${{ steps.pkg.outputs.sha256 }}
-          ARCHIVE: ${{ steps.pkg.outputs.name }}
-        run: |
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/danielkag/homebrew-gitt.git" tap
-          mkdir -p tap/Formula
-          sed -e "s|@VERSION@|${VERSION}|g" \
-              -e "s|@SHA256@|${SHA256}|g" \
-              -e "s|@ARCHIVE@|${ARCHIVE}|g" \
-              packaging/homebrew/gitt.rb.tmpl > tap/Formula/gitt.rb
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/gitt.rb
-          if git diff --cached --quiet; then
-            echo "formula already at ${VERSION}"
-          else
-            git commit -m "gitt ${VERSION}"
-            git push
           fi
