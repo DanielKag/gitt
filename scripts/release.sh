@@ -47,13 +47,25 @@ fi
 
 # --- 2. tag and push ----------------------------------------------------------------------------
 if git rev-parse "$TAG" >/dev/null 2>&1; then
-  step "Tag $TAG already exists locally"
+  # A tag left over from an interrupted run may be lightweight (an older version of this script made
+  # those). Re-create it annotated, but only while it is still local — never rewrite a pushed tag.
+  if [ "$(git cat-file -t "$TAG")" != "tag" ] && ! git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+    step "Re-creating lightweight tag $TAG as annotated"
+    git tag -d "$TAG" >/dev/null
+    git tag -a "$TAG" -m "gitt $VERSION"
+  else
+    step "Tag $TAG already exists"
+  fi
 else
   step "Tagging $TAG"
-  git tag "$TAG"
+  # Annotated (-a), not lightweight: `git push --follow-tags` silently ignores lightweight tags, and a
+  # tag that never reaches GitHub triggers no release build.
+  git tag -a "$TAG" -m "gitt $VERSION"
 fi
 step "Pushing main and $TAG"
-git push --follow-tags
+git push
+# Explicit, rather than relying on --follow-tags, so pushing the tag can't be quietly skipped.
+git push origin "refs/tags/$TAG"
 
 # --- 3. wait for the build ----------------------------------------------------------------------
 ASSET="gitt-$VERSION-macos-universal.tar.gz"
@@ -61,9 +73,17 @@ if gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' 2>/
   step "Release $TAG is already published"
 else
   step "Waiting for the release build (a few minutes)"
-  sleep 10  # give GitHub a moment to register the run for this tag
-  RUN=$(gh run list --repo "$REPO" --workflow Release --limit 1 --json databaseId --jq '.[0].databaseId')
-  [ -n "$RUN" ] || die "no Release workflow run appeared for $TAG — check $REPO's Actions tab"
+  # Match the run to THIS tag (a tag push reports the tag as headBranch). Taking "the latest Release
+  # run" would happily pick up the previous version's run and declare success.
+  RUN=""
+  for _ in $(seq 1 30); do
+    RUN=$(gh run list --repo "$REPO" --workflow Release --limit 20 \
+      --json databaseId,headBranch --jq "[.[] | select(.headBranch == \"$TAG\")] | .[0].databaseId // empty")
+    [ -n "$RUN" ] && break
+    sleep 5
+  done
+  [ -n "$RUN" ] || die "no Release run appeared for $TAG after 2.5min — check https://github.com/$REPO/actions"
+  echo "watching run $RUN"
   gh run watch "$RUN" --repo "$REPO" --exit-status \
     || die "the release build failed: gh run view $RUN --repo $REPO --log-failed"
 fi
